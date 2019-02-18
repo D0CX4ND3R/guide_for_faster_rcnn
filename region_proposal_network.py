@@ -142,8 +142,21 @@ def process_rpn_proposals(anchors, rpn_cls_pred, rpn_bbox_pred, image_shape, sca
     return selected_bboxes, selected_scores
 
 
-def build_rpn_loss(rois, roi_scores):
-    preprocess_image_batch =
+def process_anchors(gt_bboxes, img_shape, all_anchors):
+    def _process_anchors(gt_bboxes, img_shape, all_anchors):
+        total
+
+
+def build_rpn_loss(rois, roi_scores, iou_threshold, top_k_nms, top_proposal):
+    pass
+
+
+def build_cls_loss():
+    pass
+
+
+def build_loss():
+    pass
 
 
 if __name__ == '__main__':
