@@ -97,7 +97,7 @@ def process_rpn_proposals(anchors, rpn_cls_pred, rpn_bbox_pred, image_shape, sca
         t_w /= scale_factor[2]
         t_h /= scale_factor[3]
 
-    anchors_x_min, anchors_y_min, anchors_x_max, anchors_y_max = tf.unstack(anchors, axis=1)
+    anchors_x_min, anchors_y_mgenerate_anchorsin, anchors_x_max, anchors_y_max = tf.unstack(anchors, axis=1)
     anchors_width = anchors_x_max - anchors_x_min
     anchors_height = anchors_y_max - anchors_y_min
     anchors_center_x = anchors_x_min + anchors_width / 2.0
@@ -143,8 +143,48 @@ def process_rpn_proposals(anchors, rpn_cls_pred, rpn_bbox_pred, image_shape, sca
 
 
 def process_anchors(gt_bboxes, img_shape, all_anchors):
-    def _process_anchors(gt_bboxes, img_shape, all_anchors):
-        total
+    # Calculating the essential rpn labels, bboxes targets to train RPN by
+    # rpn_class_score
+    # ground_truth_boxes
+    # image_dims
+    # feat_stride (maybe means the zoom factor by backbone cnn)
+    # anchor_scales
+    # The anchor_target_layer is a well designed function to process this by many open source projects can be refer.
+    pass
+
+
+def get_verlaps(pred_bboxes, gt_bboxes):
+    return tf.py_func(get_overlaps_py, [pred_bboxes, gt_bboxes], [tf.float32])
+
+
+def get_overlaps_py(pred_bboxes, gt_bboxes):
+    len_pred_bboxes = len(pred_bboxes)
+    len_gt_bboxes = len(gt_bboxes)
+    pred_map_indeces = np.arange(len_pred_bboxes, dtype=np.int32)
+    pred_map_indeces = np.repeat(pred_map_indeces, (len_gt_bboxes,))
+    gt_map_indeces = np.arange(len_gt_bboxes, dtype=np.int32)
+    gt_map_indeces = np.repeat(gt_map_indeces[:, np.newaxis], (len_pred_bboxes,), axis=1).transpose().ravel()
+
+    intersection_boxes_x1 = np.maximum(gt_bboxes[gt_map_indeces, 0], pred_bboxes[pred_map_indeces, 0])
+    intersection_boxes_y1 = np.maximum(gt_bboxes[gt_map_indeces, 1], pred_bboxes[pred_map_indeces, 1])
+    intersection_boxes_x2 = np.minimum(gt_bboxes[gt_map_indeces, 2], pred_bboxes[pred_map_indeces, 2])
+    intersection_boxes_y2 = np.minimum(gt_bboxes[gt_map_indeces, 3], pred_bboxes[pred_map_indeces, 3])
+
+    iws = intersection_boxes_x2 - intersection_boxes_x1 + 1
+    ihs = intersection_boxes_y2 - intersection_boxes_y1 + 1
+
+    less_zero_indeces = np.bitwise_or(iws < 0, ihs < 0)
+    iws[less_zero_indeces] = 0
+    ihs[less_zero_indeces] = 0
+    gt_bboxes_areas = (gt_bboxes[gt_map_indeces, 2] - gt_bboxes[gt_map_indeces, 0] + 1) * \
+                      (gt_bboxes[gt_map_indeces, 3] - gt_bboxes[gt_map_indeces, 1] + 1)
+    pred_bboxes_areas = (pred_bboxes[pred_map_indeces, 2] - pred_bboxes[pred_map_indeces, 0] + 1) * \
+                        (pred_bboxes[pred_map_indeces, 3] - pred_bboxes[pred_map_indeces, 1] + 1)
+    intersection_areas = iws * ihs
+    ious = intersection_areas / (gt_bboxes_areas + pred_bboxes_areas - intersection_areas)
+
+    return ious.reshape([len_pred_bboxes, len_gt_bboxes])
+
 
 
 def build_rpn_loss(rois, roi_scores, iou_threshold, top_k_nms, top_proposal):
