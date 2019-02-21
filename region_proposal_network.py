@@ -27,7 +27,7 @@ def _reg():
     pass
 
 
-def generate_anchors(original_anchor, scales=[8, 16, 32], ratios=[0.5, 1, 2]):
+def generate_anchors(original_anchor=[0, 0, 15, 15], scales=[8, 16, 32], ratios=[0.5, 1, 2]):
     def _gen_anchors(width, height):
         wn = np.repeat(width, len(scales)) * np.array(scales)
         hn = np.repeat(height, len(scales)) * np.array(scales)
@@ -75,6 +75,9 @@ def rpn(feature_map, rpn_config=RpnConfig(2)):
 
         # rpn_cls_score
         rpn_cls_score = slim.conv2d(features, 2 * rpn_config.anchor_num, [1, 1],
+                                    normalizer_fn=slim.batch_norm,
+                                    normalizer_params={'decacy': 0.995, 'epsilon': 0.0001},
+                                    weights_regularizer=tf.nn.l2_normalize(0.0005),
                                     activation_fn=None, scope='rpn_cls_score')
         rpn_cls_score = tf.reshape(rpn_cls_score, [-1, 2])
         rpn_cls_pred = slim.softmax(rpn_cls_score, scope='rpn_cls_pred')
@@ -142,7 +145,34 @@ def process_rpn_proposals(anchors, rpn_cls_pred, rpn_bbox_pred, image_shape, sca
     return selected_bboxes, selected_scores
 
 
-def process_anchors(gt_bboxes, img_shape, all_anchors):
+def make_anchors_in_image(anchor_base, feature_width, feature_height, feature_stride):
+    _anchors = generate_anchors(original_anchor=[1, 1, anchor_base - 1, anchor_base - 1])
+    shift_x = np.arange(feature_width) * feature_stride
+    shift_y = np.arange(feature_height) * feature_stride
+    shift_x, shift_y = np.meshgrid(shift_x, shift_y)
+
+    shifts = np.vstack([shift_x.ravel(), shift_y.ravel(), shift_x.ravel(), shift_y.ravel()]).transpose()
+    all_anchors = _anchors[np.newaxis, :, :] + shifts[:, np.newaxis, :]
+    return all_anchors.reshape(-1, 4)
+
+
+def check_anchors(all_anchors, image_shape, allowed_boader=0):
+    image_height, image_width = image_shape
+    inside_boader_indeces = np.where(
+        (all_anchors[:, 0] >= -allowed_boader) &
+        (all_anchors[:, 1] >= -allowed_boader) &
+        (all_anchors[:, 2] < image_width + allowed_boader) &
+        (all_anchors[:, 3] < image_height + allowed_boader)
+    )[0]
+    return inside_boader_indeces
+
+
+def generate_rpn_labels(all_anchors, gt_bboxes):
+    inside_boarder_indeces = check_anchors(all_anchors)
+
+
+
+def process_anchors(rpn_cls_pred, gt_bboxes, img_shape, all_anchors):
     # Calculating the essential rpn labels, bboxes targets to train RPN by
     # rpn_class_score
     # ground_truth_boxes
@@ -150,7 +180,8 @@ def process_anchors(gt_bboxes, img_shape, all_anchors):
     # feat_stride (maybe means the zoom factor by backbone cnn)
     # anchor_scales
     # The anchor_target_layer is a well designed function to process this by many open source projects can be refer.
-    pass
+    im_h, im_w = img_shape
+
 
 
 def get_verlaps(pred_bboxes, gt_bboxes):
