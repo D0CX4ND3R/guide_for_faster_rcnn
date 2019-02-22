@@ -18,6 +18,10 @@ class RpnConfig(object):
     def class_count(self):
         return self.cls_count
 
+    @property
+    def rpn_iou_positive_threshold(self):
+        return self.rpn_iou_positive_th
+
 
 def _cls():
     pass
@@ -168,8 +172,110 @@ def check_anchors(all_anchors, image_shape, allowed_boader=0):
 
 
 def generate_rpn_labels(all_anchors, gt_bboxes):
-    inside_boarder_indeces = check_anchors(all_anchors)
+    inside_boarder_indexes = check_anchors(all_anchors)
+    anchors = all_anchors[inside_boarder_indexes, :]
 
+    # labels: positive=1; negative=0; not_care=-1
+    labels = np.empty((len(inside_boarder_indexes),), dtype=np.float32)
+    labels.fill(-1)
+
+    overlaps = get_overlaps_py(anchors, gt_bboxes)
+    # overlaps: cross ious for each anchors and gt_boxes
+    # rows: Anchors Indexes
+    # columns: Ground Truth Bounding Box Indexes
+    # The indexes of ground truth bounding box have maximum overlap area for each anchors.
+    max_overlap_gt_indexes = np.argmax(overlaps, axis=1)
+    max_overlaps_gt = overlaps[np.arange(len(inside_boarder_indexes), dtype=np.int32), max_overlap_gt_indexes]
+
+    # The indexes of anchors with maximum overlap area with each ground truth bonding boxes.
+    max_overlap_anchor_indexes = np.argmax(overlaps, axis=0)
+    max_overlap_anchor = overlaps[max_overlap_anchor_indexes, np.arange(len(gt_bboxes), dtype=np.int32)]
+    max_overlap_indexes = np.where(max_overlap_anchor == max_overlaps_gt)[0]
+
+    # TODO: Modify CONFIG
+    # Set negative labels
+    labels[max_overlaps_gt < 0.3] = 0
+
+    # Set positive labels
+    labels[max_overlaps_gt >= 0.7] = 1
+
+    return anchors, labels
+
+
+def foreground_background_limit(labels):
+    fg_num = int(0.5 * 2000)
+    bg_num = int(0.5 * 2000)
+    # TODO: Set limitation number of foreground and background.
+    fg_indexes = np.where(labels == 1)[0]
+    bg_indexes = np.where(labels == 0)[0]
+
+    if len(fg_indexes) > fg_num:
+        disable_indexes = np.random.choice(fg_indexes, len(fg_indexes) - fg_num, replace=False)
+        labels[disable_indexes] = -1
+
+    if len(bg_indexes) > bg_num:
+        disable_indexes = np.random.choice(bg_indexes, len(bg_indexes) - bg_num, replace=False)
+        labels[disable_indexes] = -1
+
+
+def bboxes2anchors(bboxes):
+    widths = bboxes[:, 2] - bboxes[:, 0] + 1
+    heights = bboxes[:, 3] - bboxes[:, 1] + 1
+    x_centers = (bboxes[:, 2] + bboxes[:, 0]) / 2.0
+    y_centers = (bboxes[:, 3] + bboxes[:, 1]) / 2.0
+    return x_centers, y_centers, widths, heights
+
+
+def anchors2bboxes(anchors):
+    xx1 = anchors[:, 0] - anchors[:, 2] / 2.0 + 0.5
+    xx2 = anchors[:, 0] + anchors[:, 2] / 2.0 - 0.5
+    yy1 = anchors[:, 1] - anchors[:, 3] / 2.0 + 0.5
+    yy2 = anchors[:, 1] + anchors[:, 3] / 2.0 + 0.5
+    return xx1, yy1, xx2, yy2
+
+
+def encode_bboxes(pred_bboxes, gt_bboxes, scale_factor=None):
+    pred_x_centers, pred_y_centers, pred_widths, pred_heigths = bboxes2anchors(pred_bboxes)
+    gt_x_centers, gt_y_centers, gt_widths, gt_heigths = bboxes2anchors(gt_bboxes)
+
+    # Avoid divide zero
+    pred_widths = pred_widths + 1e-8
+    pred_heigths = pred_heigths + 1e-8
+    gt_widths = gt_widths + 1e-8
+    gt_heigths = gt_heigths + 1e-8
+
+    t_x = (pred_x_centers - gt_x_centers) / gt_x_centers
+    t_y = (pred_y_centers - gt_y_centers) / gt_y_centers
+    t_w = np.log(pred_widths / gt_widths)
+    t_h = np.log(pred_heigths / gt_heigths)
+
+    if scale_factor:
+        t_x *= scale_factor[0]
+        t_y *= scale_factor[1]
+        t_w *= scale_factor[2]
+        t_h *= scale_factor[3]
+    return np.stack([t_x, t_y, t_w, t_h], axis=1)
+
+
+def decode_bboxes(encoded_pred_bboxes, gt_bboxes, scale_factor=None):
+    t_x, t_y, t_w, t_h = tf.unstack(encoded_pred_bboxes, axis=1)
+    if scale_factor:
+        t_x = t_x / scale_factor[0]
+        t_y = t_y / scale_factor[1]
+        t_w = t_w / scale_factor[2]
+        t_h = t_h / scale_factor[3]
+
+    gt_x_centers, gt_y_centers, gt_widths, gt_heigths = bboxes2anchors(gt_bboxes)
+
+    pred_x_centers = t_x * gt_x_centers + gt_x_centers
+    pred_y_centers = t_y * gt_y_centers + gt_y_centers
+    pred_widths = tf.exp(t_w) * gt_widths
+    pred_heights = tf.exp(t_h) * gt_heigths
+
+    pred_xx1, pred_yy1, pred_xx2, pred_yy2 = anchors2bboxes(tf.stack(
+        [pred_x_centers, pred_y_centers, pred_widths, pred_heights], axis=1))
+
+    return tf.stack([pred_xx1, pred_yy1, pred_xx2, pred_yy2], axis=1)
 
 
 def process_anchors(rpn_cls_pred, gt_bboxes, img_shape, all_anchors):
@@ -189,6 +295,13 @@ def get_verlaps(pred_bboxes, gt_bboxes):
 
 
 def get_overlaps_py(pred_bboxes, gt_bboxes):
+    """
+    Caluculate overlap area of predicted acnchors and ground truth. Inputs K anchors and N ground truth boxes, returns
+    K * N array of ious.
+    :param pred_bboxes: Generated anchors.
+    :param gt_bboxes: Ground truth bounding boxes.
+    :return: Intersection of Union of anchors and ground truth bounding box.
+    """
     len_pred_bboxes = len(pred_bboxes)
     len_gt_bboxes = len(gt_bboxes)
     pred_map_indeces = np.arange(len_pred_bboxes, dtype=np.int32)
