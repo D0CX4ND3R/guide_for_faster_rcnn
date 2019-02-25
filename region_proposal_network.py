@@ -3,6 +3,8 @@ from tensorflow.contrib import slim
 
 import numpy as np
 
+from utils.anchor_utils import anchors2bboxes, bboxes2anchors, decode_bboxes, encode_bboxes
+
 
 class RpnConfig(object):
     def __init__(self, class_count):
@@ -70,7 +72,7 @@ def generate_anchors(original_anchor=[0, 0, 15, 15], scales=[8, 16, 32], ratios=
     return np.vstack(anchors)
 
 
-def rpn(feature_map, rpn_config=RpnConfig(2)):
+def rpn(feature_map, image_shape, gt_bboxes, rpn_config=RpnConfig(2)):
     with tf.variable_scope('rpn'):
         features = slim.conv2d(feature_map, 512, [3, 3], normalizer_fn=slim.batch_norm,
                                normalizer_params={'decacy': 0.995, 'epsilon': 0.0001},
@@ -90,6 +92,33 @@ def rpn(feature_map, rpn_config=RpnConfig(2)):
         rpn_bbox_pred = slim.conv2d(features, rpn_config.anchor_num * rpn_config.class_count, [1, 1],
                                     activation_fn=None, scope='rpn_bbox_pred')
         rpn_bbox_pred = tf.reshape(rpn_bbox_pred, [-1, 4])
+
+        featuremap_height, featuremap_width = tf.shape(features)[1], tf.shape(features)[2]
+        featuremap_height = tf.cast(featuremap_height, dtype=tf.float32)
+        featuremap_width = tf.cast(featuremap_width, dtype=tf.float32)
+
+        # TODO: Modified the anchor settings
+        # generate anchors
+        anchors = make_anchors_in_image(16, featuremap_width, featuremap_height, feature_stride=8)
+
+        # process rpn proposals, including clip, decode, nms
+        rois, roi_scores = process_rpn_proposals(anchors, rpn_cls_pred, rpn_bbox_pred, image_shape)
+
+        # TODO: Add summary
+
+        # generate labels and bboxes to train rpn
+        rpn_labels, rpn_bbox_targets = tf.py_func(generate_rpn_labels, [anchors, gt_bboxes, image_shape],
+                                                  [tf.float32, tf.float32])
+        rpn_labels = tf.to_int32(rpn_labels)
+        rpn_labels = tf.reshape(rpn_labels, [-1])
+        rpn_bbox_targets = tf.reshape(rpn_bbox_targets, [-1, 4])
+
+        # calculate class accuracy
+        rpn_cls_category = tf.argmax(rpn_cls_pred, axis=1)
+        calculated_rpn_target_indexes = tf.reshape(tf.where(tf.not_equal(rpn_labels, -1))[0], [-1])
+        rpn_cls_category = tf.cast(tf.gather(rpn_cls_category, calculated_rpn_target_indexes), dtype=tf.float32)
+        gt_labels = tf.cast(tf.gather(rpn_labels, calculated_rpn_target_indexes), dtype=tf.float32)
+        acc = tf.reduce_mean(tf.equal(rpn_cls_category, gt_labels))
 
     return rpn_cls_pred, rpn_bbox_pred
 
@@ -141,6 +170,8 @@ def process_rpn_proposals(anchors, rpn_cls_pred, rpn_bbox_pred, image_shape, sca
     predict_targets_count = tf.minimum(12000, tf.shape(predict_bboxes)[0])
     sorted_cls_scores, sorted_pred_indeces = tf.nn.top_k(rpn_cls_pred, predict_targets_count)
     sorted_bounding_boxes = tf.gather(predict_bboxes, sorted_pred_indeces)
+
+    # 3. NMS
     selected_bboxes_indeces = tf.image.non_max_suppression(sorted_bounding_boxes, sorted_cls_scores,
                                                            image_shape[0] * image_shape[1])
 
@@ -171,8 +202,19 @@ def check_anchors(all_anchors, image_shape, allowed_boader=0):
     return inside_boader_indeces
 
 
-def generate_rpn_labels(all_anchors, gt_bboxes):
-    inside_boarder_indexes = check_anchors(all_anchors)
+def generate_rpn_labels(all_anchors, gt_bboxes, image_shape):
+    def _umap(data, count, indexes, fill=0):
+        if len(data.shape) == 1:
+            ret = np.empty((count,), dtype=np.float32)
+            ret.fill(fill)
+            ret[indexes] = data
+        else:
+            ret = np.empty((count,) + data.shape[1:], dtype=np.float32)
+            ret.fill(fill)
+            ret[indexes, :] = data
+        return ret
+
+    inside_boarder_indexes = check_anchors(all_anchors, image_shape)
     anchors = all_anchors[inside_boarder_indexes, :]
 
     # labels: positive=1; negative=0; not_care=-1
@@ -192,6 +234,7 @@ def generate_rpn_labels(all_anchors, gt_bboxes):
     max_overlap_anchor = overlaps[max_overlap_anchor_indexes, np.arange(len(gt_bboxes), dtype=np.int32)]
     max_overlap_indexes = np.where(max_overlap_anchor == max_overlaps_gt)[0]
 
+    labels[max_overlap_indexes] = 1
     # TODO: Modify CONFIG
     # Set negative labels
     labels[max_overlaps_gt < 0.3] = 0
@@ -199,7 +242,17 @@ def generate_rpn_labels(all_anchors, gt_bboxes):
     # Set positive labels
     labels[max_overlaps_gt >= 0.7] = 1
 
-    return anchors, labels
+    foreground_background_limit(labels)
+
+    bbox_targets = encode_bboxes(anchors, gt_bboxes[max_overlaps_gt, :])
+
+    labels = _umap(labels, all_anchors.reshape[0], inside_boarder_indexes, fill=-1)
+    bbox_targets = _umap(bbox_targets, all_anchors.reshape[0], inside_boarder_indexes)
+
+    bbox_targets = bbox_targets.reshape([-1, 4])
+    labels = labels.reshape([-1, 1])
+
+    return bbox_targets, labels
 
 
 def foreground_background_limit(labels):
@@ -218,66 +271,6 @@ def foreground_background_limit(labels):
         labels[disable_indexes] = -1
 
 
-def bboxes2anchors(bboxes):
-    widths = bboxes[:, 2] - bboxes[:, 0] + 1
-    heights = bboxes[:, 3] - bboxes[:, 1] + 1
-    x_centers = (bboxes[:, 2] + bboxes[:, 0]) / 2.0
-    y_centers = (bboxes[:, 3] + bboxes[:, 1]) / 2.0
-    return x_centers, y_centers, widths, heights
-
-
-def anchors2bboxes(anchors):
-    xx1 = anchors[:, 0] - anchors[:, 2] / 2.0 + 0.5
-    xx2 = anchors[:, 0] + anchors[:, 2] / 2.0 - 0.5
-    yy1 = anchors[:, 1] - anchors[:, 3] / 2.0 + 0.5
-    yy2 = anchors[:, 1] + anchors[:, 3] / 2.0 + 0.5
-    return xx1, yy1, xx2, yy2
-
-
-def encode_bboxes(pred_bboxes, gt_bboxes, scale_factor=None):
-    pred_x_centers, pred_y_centers, pred_widths, pred_heigths = bboxes2anchors(pred_bboxes)
-    gt_x_centers, gt_y_centers, gt_widths, gt_heigths = bboxes2anchors(gt_bboxes)
-
-    # Avoid divide zero
-    pred_widths = pred_widths + 1e-8
-    pred_heigths = pred_heigths + 1e-8
-    gt_widths = gt_widths + 1e-8
-    gt_heigths = gt_heigths + 1e-8
-
-    t_x = (pred_x_centers - gt_x_centers) / gt_x_centers
-    t_y = (pred_y_centers - gt_y_centers) / gt_y_centers
-    t_w = np.log(pred_widths / gt_widths)
-    t_h = np.log(pred_heigths / gt_heigths)
-
-    if scale_factor:
-        t_x *= scale_factor[0]
-        t_y *= scale_factor[1]
-        t_w *= scale_factor[2]
-        t_h *= scale_factor[3]
-    return np.stack([t_x, t_y, t_w, t_h], axis=1)
-
-
-def decode_bboxes(encoded_pred_bboxes, gt_bboxes, scale_factor=None):
-    t_x, t_y, t_w, t_h = tf.unstack(encoded_pred_bboxes, axis=1)
-    if scale_factor:
-        t_x = t_x / scale_factor[0]
-        t_y = t_y / scale_factor[1]
-        t_w = t_w / scale_factor[2]
-        t_h = t_h / scale_factor[3]
-
-    gt_x_centers, gt_y_centers, gt_widths, gt_heigths = bboxes2anchors(gt_bboxes)
-
-    pred_x_centers = t_x * gt_x_centers + gt_x_centers
-    pred_y_centers = t_y * gt_y_centers + gt_y_centers
-    pred_widths = tf.exp(t_w) * gt_widths
-    pred_heights = tf.exp(t_h) * gt_heigths
-
-    pred_xx1, pred_yy1, pred_xx2, pred_yy2 = anchors2bboxes(tf.stack(
-        [pred_x_centers, pred_y_centers, pred_widths, pred_heights], axis=1))
-
-    return tf.stack([pred_xx1, pred_yy1, pred_xx2, pred_yy2], axis=1)
-
-
 def process_anchors(rpn_cls_pred, gt_bboxes, img_shape, all_anchors):
     # Calculating the essential rpn labels, bboxes targets to train RPN by
     # rpn_class_score
@@ -287,11 +280,6 @@ def process_anchors(rpn_cls_pred, gt_bboxes, img_shape, all_anchors):
     # anchor_scales
     # The anchor_target_layer is a well designed function to process this by many open source projects can be refer.
     im_h, im_w = img_shape
-
-
-
-def get_verlaps(pred_bboxes, gt_bboxes):
-    return tf.py_func(get_overlaps_py, [pred_bboxes, gt_bboxes], [tf.float32])
 
 
 def get_overlaps_py(pred_bboxes, gt_bboxes):
@@ -331,7 +319,7 @@ def get_overlaps_py(pred_bboxes, gt_bboxes):
 
 
 
-def build_rpn_loss(rois, roi_scores, iou_threshold, top_k_nms, top_proposal):
+def build_rpn_loss(rpn_cls_pred, labels, ):
     pass
 
 
