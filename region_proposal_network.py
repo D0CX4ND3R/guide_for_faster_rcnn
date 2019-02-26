@@ -114,13 +114,51 @@ def rpn(feature_map, image_shape, gt_bboxes, rpn_config=RpnConfig(2)):
         rpn_bbox_targets = tf.reshape(rpn_bbox_targets, [-1, 4])
 
         # calculate class accuracy
-        rpn_cls_category = tf.argmax(rpn_cls_pred, axis=1)
+        rpn_cls_category = tf.argmax(rpn_cls_pred, axis=1)  # get 0 or 1 to represent the backround or foreground
+
+        # exclude not care labels
         calculated_rpn_target_indexes = tf.reshape(tf.where(tf.not_equal(rpn_labels, -1))[0], [-1])
+
         rpn_cls_category = tf.cast(tf.gather(rpn_cls_category, calculated_rpn_target_indexes), dtype=tf.float32)
         gt_labels = tf.cast(tf.gather(rpn_labels, calculated_rpn_target_indexes), dtype=tf.float32)
         acc = tf.reduce_mean(tf.equal(rpn_cls_category, gt_labels))
 
+        # TODO: Add summary
+
+
+
     return rpn_cls_pred, rpn_bbox_pred
+
+
+def process_proposal_targets(rpn_rois, gt_bboxes):
+    """
+    Assign object detection proposals to ground truth. Produce proposal classification labels and
+    bounding box regression targets.
+    :param rpn_rois:
+    :param gt_bboxes:
+    :return:
+    """
+    # rpn rois: [x1, y1, x2, y2]
+    # ground truth: [x1, y1, x2, y2, label]
+    # TODO: Set a modify to consider add gt_bboxes to train rpn.
+    add_gtbox_to_train = False
+    if add_gtbox_to_train:
+        all_rois = np.concatenate([rpn_rois, gt_bboxes[:, :-1]], axis=0)
+    else:
+        all_rois = rpn_rois
+
+    # TODO: Add config for fast rcnn minibatch size
+    fast_rcnn_minibatch_size = 256
+    rois_per_image = np.inf if fast_rcnn_minibatch_size == -1 else fast_rcnn_minibatch_size
+
+    fast_rcnn_positive_rate = 0.25
+    fg_rois_per_image = np.round(fast_rcnn_positive_rate * rois_per_image)
+
+    # Sample rois with classification labels and bounding box regression.
+
+
+
+
 
 
 def process_rpn_proposals(anchors, rpn_cls_pred, rpn_bbox_pred, image_shape, scale_factor=None):
