@@ -101,9 +101,6 @@ def rpn(feature_map, image_shape, gt_bboxes, rpn_config=RpnConfig(2)):
         # generate anchors
         anchors = make_anchors_in_image(16, featuremap_width, featuremap_height, feature_stride=8)
 
-        # process rpn proposals, including clip, decode, nms
-        rois, roi_scores = process_rpn_proposals(anchors, rpn_cls_pred, rpn_bbox_pred, image_shape)
-
         # TODO: Add summary
 
         # generate labels and bboxes to train rpn
@@ -124,6 +121,9 @@ def rpn(feature_map, image_shape, gt_bboxes, rpn_config=RpnConfig(2)):
         acc = tf.reduce_mean(tf.equal(rpn_cls_category, gt_labels))
 
         # TODO: Add summary
+
+        # process rpn proposals, including clip, decode, nms
+        rois, roi_scores = process_rpn_proposals(anchors, rpn_cls_pred, rpn_bbox_pred, image_shape)
 
 
 
@@ -155,6 +155,16 @@ def process_proposal_targets(rpn_rois, gt_bboxes):
     fg_rois_per_image = np.round(fast_rcnn_positive_rate * rois_per_image)
 
     # Sample rois with classification labels and bounding box regression.
+    # TODO: Add class count in config.
+
+    overlaps = get_overlaps_py(rpn_rois, gt_bboxes[:, :-1])
+    max_overlaps_gt_indexes = np.argmax(overlaps, axis=1)
+    max_overlaps = np.max(overlaps, axis=1)
+
+    labels = gt_bboxes[max_overlaps_gt_indexes, -1]
+
+    # TODO: Add iou threshold
+
 
 
 
