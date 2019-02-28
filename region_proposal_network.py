@@ -85,8 +85,8 @@ def rpn(feature_map, image_shape, gt_bboxes, rpn_config=RpnConfig(2)):
                                     normalizer_params={'decacy': 0.995, 'epsilon': 0.0001},
                                     weights_regularizer=tf.nn.l2_normalize(0.0005),
                                     activation_fn=None, scope='rpn_cls_score')
-        rpn_cls_score = tf.reshape(rpn_cls_score, [-1, 2])
-        rpn_cls_pred = slim.softmax(rpn_cls_score, scope='rpn_cls_pred')
+        reshaped_rpn_cls_score = tf.reshape(rpn_cls_score, [-1, 2])
+        rpn_cls_pred = slim.softmax(reshaped_rpn_cls_score, scope='rpn_cls_pred')
 
         # rpn_bbox_pred
         rpn_bbox_pred = slim.conv2d(features, rpn_config.anchor_num * rpn_config.class_count, [1, 1],
@@ -122,12 +122,24 @@ def rpn(feature_map, image_shape, gt_bboxes, rpn_config=RpnConfig(2)):
 
         # TODO: Add summary
 
-        # process rpn proposals, including clip, decode, nms
-        rois, roi_scores = process_rpn_proposals(anchors, rpn_cls_pred, rpn_bbox_pred, image_shape)
+        with tf.control_dependencies([rpn_labels]):
+            # process rpn proposals, including clip, decode, nms
+            rois, roi_scores = process_rpn_proposals(anchors, rpn_cls_pred, rpn_bbox_pred, image_shape)
+            rois, labels, bbox_targets = tf.py_func(process_proposal_targets, rois, gt_bboxes,
+                                                    [tf.float32, tf.float32, tf.float32])
 
+            rois = tf.reshape(rois, [-1, 4])
+            labels = tf.reshape(tf.to_int32(labels), [-1])
+            # TODO: Set class numbers NUM_CLASS
+            num_class = 3
+            bbox_targets = tf.reshape(bbox_targets, [-1, 4 * (num_class + 1)])
 
+        with tf.variable_scope('rpn_cls_loss'):
+            shape = tf.shape(rpn_cls_score)
 
-    return rpn_cls_pred, rpn_bbox_pred
+            rpn_cls_score =
+
+    return rpn_cls_score, rpn_bbox_pred, rpn_bbox_targets, rpn_labels, rois, labels, bbox_targets
 
 
 def process_proposal_targets(rpn_rois, gt_bboxes):
@@ -156,6 +168,9 @@ def process_proposal_targets(rpn_rois, gt_bboxes):
 
     # Sample rois with classification labels and bounding box regression.
     # TODO: Add class count in config.
+    # ALGORTHM:
+    # 1. Calculates overlaps between rois and ground truth.
+    # 2. Get the maximum overlap area for each roi and set it label equal to the ground truth.
 
     overlaps = get_overlaps_py(rpn_rois, gt_bboxes[:, :-1])
     max_overlaps_gt_indexes = np.argmax(overlaps, axis=1)
@@ -163,12 +178,52 @@ def process_proposal_targets(rpn_rois, gt_bboxes):
 
     labels = gt_bboxes[max_overlaps_gt_indexes, -1]
 
-    # TODO: Add iou threshold
+    # 3. Set overlap iou larger than iou threshold as positive sample, and less than threshold as negative samples.
+    # IOU > POSITIVE_THRESHOLD = 0.5 => POSITIVE
+    # 0 = NEGATIVE_THRESHOLD < IOU < POSITIVE_THRESHOLD = 0.5 => NEGATIVE
+    # 4. Let the total numbers of rois equal to the ROIS_PER_IMAGE = FOREGROUND_ROIS_PER_IMAGE + BACKGROUND_ROIS_PER_IMAGE
+    # TODO: Add iou threshold to chose positive foreground and negative background
+    # temp BEGIN
+    iou_positive_iou_threshold = 0.5
+    iou_negative_iou_threshold = 0.0
+    # temp END
+    # chose foreground indices
+    fg_indices = np.where(max_overlaps >= iou_positive_iou_threshold)[0]
+    fg_rois_per_image = np.minimum(fg_rois_per_image, fg_indices.size)
+    if fg_indices.size > 0:
+        fg_indices = np.random.choice(fg_indices, size=int(fg_rois_per_image), replace=False)
 
+    # chose background indices
+    bg_indices = np.where((max_overlaps < iou_positive_iou_threshold) &
+                          (max_overlaps >= iou_negative_iou_threshold))[0]
+    bg_roi_per_image = rois_per_image - fg_rois_per_image
+    bg_roi_per_image = np.minimum(bg_roi_per_image, bg_indices.size)
 
+    if bg_indices.size > 0:
+        bg_indices = np.random.choice(bg_indices, size=int(bg_roi_per_image), replace=False)
 
+    keep_indices = np.append(fg_indices, bg_indices)
+    labels = labels[keep_indices]
 
+    # 5. Make the negative labels equal to 0.
+    labels[int(fg_rois_per_image):] = 0
+    rois = all_rois[keep_indices]
 
+    # 6. Encodes bounding boxes to targets coordinates for bounding box regression.
+    bbox_targets_data = encode_bboxes(rois, gt_bboxes[max_overlaps_gt_indexes[keep_indices], :-1])
+    # bbox_targets_data = np.hstack([labels[:, np.newaxis], bbox_targets_data]).astype(np.float32, copy=False)
+
+    # TODO: Set class number.
+    num_class = 3 + 1
+    bbox_targets = np.zeros((labels.size, 4 * num_class), dtype=np.float32)
+    inds = np.where(labels > 0)[0]
+    for i in inds:
+        cls = labels[i]
+        start = int(4 * cls)
+        end = start + 4
+        bbox_targets[i, start:end] = bbox_targets_data[i, 1:]
+
+    return rois, labels, bbox_targets
 
 
 def process_rpn_proposals(anchors, rpn_cls_pred, rpn_bbox_pred, image_shape, scale_factor=None):
