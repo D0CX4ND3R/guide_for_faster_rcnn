@@ -87,6 +87,4 @@ def resnext_head(net, feature_dim=1000):
 
         # global average pooling
         net = tf.reduce_mean(net, axis=[1, 2], name='global_average_pooling')
-
-        net = slim.flatten(net, scope='flatten')
     return net
