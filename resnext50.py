@@ -72,25 +72,21 @@ def inference(inputs, name='resnext50'):
                     net = _conv2d_block(net, 512, 4, i, projection=True)
                 else:
                     net = _conv2d_block(net, 512, 4, i)
+    return net
 
+
+def resnext_head(net, feature_dim=1000):
+    with tf.variable_scope('resnext50', reuse=True):
         # conv5 14 x 14 x 1024 => 7 x 7 x 2048
-        with tf.variable_scope(name + '_conv5'):
+        with tf.variable_scope('resnext50_conv5'):
             for i in range(3):
                 if i == 0:
                     net = _conv2d_block(net, 1024, 5, i, projection=True)
                 else:
                     net = _conv2d_block(net, 1024, 5, i)
-    return net
 
-
-def resnext_head(net, feature_dim=1000):
-    with tf.variable_scope('resnext50_head'):
         # global average pooling
-        with tf.variable_scope('resnext50_global_average_pooling'):
-            kh, kw = tf.to_int32(tf.shape(net)[1]), tf.to_int32(tf.shape(net)[2])
-            net = slim.avg_pool2d(net, [kh, kw])
+        net = tf.reduce_mean(net, axis=[1, 2], name='global_average_pooling')
 
-        net = slim.flatten(net, scope='flatter')
-
-        net = slim.fully_connected(net, feature_dim, scope='fc')
+        net = slim.flatten(net, scope='flatten')
     return net
