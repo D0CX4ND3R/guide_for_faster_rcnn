@@ -34,14 +34,14 @@ def _conv2d_block(net, filters, block_num, conv_num, cardinality=32, projection=
         return tf.nn.relu(net + residul_net, name='conv{}_relu'.format(block_num))
 
 
-def inference(inputs, name='resnext50', global_average_pooling=False):
+def inference(inputs, name='resnext50'):
     # preprocess 224 x 224 x 3
     preprocessed_inputs = _preprocess(inputs)
 
     with tf.variable_scope(name, 'resnext50'):
 
         # conv1 224 x 224 x 3 => 112 x 112 x 64
-        with tf.name_scope(name + '_conv1'):
+        with tf.variable_scope(name + '_conv1'):
             with slim.arg_scope([slim.conv2d], activation_fn=tf.nn.relu,
                                 normalizer_fn=slim.batch_norm,
                                 normalizer_params=_bn_params,
@@ -50,7 +50,7 @@ def inference(inputs, name='resnext50', global_average_pooling=False):
                 net = slim.max_pool2d(net, 2, scope='pool1')
 
         # conv2 112 x 112 x 64 => 56 x 56 x 256
-        with tf.name_scope(name + '_conv2'):
+        with tf.variable_scope(name + '_conv2'):
             for i in range(3):
                 if i == 0:
                     net = _conv2d_block(net, 128, 2, i, projection=True)
@@ -58,7 +58,7 @@ def inference(inputs, name='resnext50', global_average_pooling=False):
                     net = _conv2d_block(net, 128, 2, i)
 
         # conv3 56 x 56 x 256 => 28 x 28 x 512
-        with tf.name_scope(name + '_conv3'):
+        with tf.variable_scope(name + '_conv3'):
             for i in range(4):
                 if i == 0:
                     net = _conv2d_block(net, 256, 3, i, projection=True)
@@ -66,7 +66,7 @@ def inference(inputs, name='resnext50', global_average_pooling=False):
                     net = _conv2d_block(net, 256, 3, i)
 
         # conv4 28 x 28 x 512 => 14 x 14 x 1024
-        with tf.name_scope(name + '_conv4'):
+        with tf.variable_scope(name + '_conv4'):
             for i in range(6):
                 if i == 0:
                     net = _conv2d_block(net, 512, 4, i, projection=True)
@@ -74,16 +74,23 @@ def inference(inputs, name='resnext50', global_average_pooling=False):
                     net = _conv2d_block(net, 512, 4, i)
 
         # conv5 14 x 14 x 1024 => 7 x 7 x 2048
-        with tf.name_scope(name + '_conv5'):
+        with tf.variable_scope(name + '_conv5'):
             for i in range(3):
                 if i == 0:
                     net = _conv2d_block(net, 1024, 5, i, projection=True)
                 else:
                     net = _conv2d_block(net, 1024, 5, i)
+    return net
 
+
+def resnext_head(net, feature_dim=1000):
+    with tf.variable_scope('resnext50_head'):
         # global average pooling
-        if global_average_pooling:
-            with tf.name_scope(name + '_global_average_pooling'):
-                net = slim.avg_pool2d(net, 2)
+        with tf.variable_scope('resnext50_global_average_pooling'):
+            kh, kw = tf.to_int32(tf.shape(net)[1]), tf.to_int32(tf.shape(net)[2])
+            net = slim.avg_pool2d(net, [kh, kw])
 
+        net = slim.flatten(net, scope='flatter')
+
+        net = slim.fully_connected(net, feature_dim, scope='fc')
     return net
