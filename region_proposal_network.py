@@ -34,7 +34,14 @@ def _reg():
     pass
 
 
-def generate_anchors(original_anchor=[0, 0, 15, 15], scales=[8, 16, 32], ratios=[0.5, 1, 2]):
+def generate_anchors(original_anchor=None, scales=None, ratios=None):
+    if ratios is None:
+        ratios = [0.5, 1, 2]
+    if scales is None:
+        scales = [8, 16, 32]
+    if original_anchor is None:
+        original_anchor = [0, 0, 15, 15]
+
     def _gen_anchors(width, height):
         wn = np.repeat(width, len(scales)) * np.array(scales)
         hn = np.repeat(height, len(scales)) * np.array(scales)
