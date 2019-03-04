@@ -2,6 +2,52 @@ import numpy as np
 import tensorflow as tf
 
 
+def generate_anchors(original_anchor=None, scales=None, ratios=None):
+    if ratios is None:
+        ratios = [0.5, 1, 2]
+    if scales is None:
+        scales = [8, 16, 32]
+    if original_anchor is None:
+        original_anchor = [0, 0, 15, 15]
+
+    def _gen_anchors(width, height):
+        wn = np.repeat(width, len(scales)) * np.array(scales)
+        hn = np.repeat(height, len(scales)) * np.array(scales)
+
+        wn = wn[:, np.newaxis]
+        hn = hn[:, np.newaxis]
+        return np.hstack([x_center - (wn - 1) / 2, y_center - (hn - 1) / 2,
+                          x_center + (wn - 1) / 2, y_center + (hn - 1) / 2])
+
+    # calculate original anchor's width, height and center coordinate
+    w = original_anchor[2] - original_anchor[0] + 1
+    h = original_anchor[3] - original_anchor[1] + 1
+    x_center = original_anchor[0] + (w - 1) / 2
+    y_center = original_anchor[1] + (h - 1) / 2
+
+    # calculate the original anchor's area
+    original_area = w * h
+
+    # calculate the three ratios areas
+    three_ratios_area = original_area * np.array(ratios)
+
+    # calculate the three kinds of areas width and height
+    three_ratios_width = np.round(np.sqrt(three_ratios_area))
+    three_ratios_height = three_ratios_width / np.array(ratios)
+
+    # calculate anchors, each anchors coordinate is [x1, y1, x2, y2]
+    # (x1, y1)-----------------------------------------
+    # |                                                |
+    # |                                                |
+    # |                                                |
+    # |                                                |
+    # |                                                |
+    # ------------------------------------------(x2, y2)
+    anchors = [_gen_anchors(wr, hr) for wr, hr in zip(three_ratios_width, three_ratios_height)]
+
+    return np.vstack(anchors)
+
+
 def bboxes2anchors(bboxes):
     widths = bboxes[:, 2] - bboxes[:, 0] + 1
     heights = bboxes[:, 3] - bboxes[:, 1] + 1

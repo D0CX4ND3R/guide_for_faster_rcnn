@@ -2,6 +2,8 @@ import tensorflow as tf
 from tensorflow.contrib import slim
 
 import resnext50
+from utils.anchor_utils import decode_bboxes
+from utils.losses import smooth_l1_loss_rcnn
 
 
 def faster_rcnn(features, rois, image_shape, is_training=True):
@@ -26,13 +28,60 @@ def faster_rcnn(features, rois, image_shape, is_training=True):
     return cls_score, bbox_pred
 
 
-def process_faster_rcnn(rois, bbox_pred, cls_prob, image_shape):
+def process_faster_rcnn(rois, bbox_pred, scores, image_shape):
     with tf.variable_scope('postprocess_faster_rcnn'):
         rois = tf.stop_gradient(rois)
+        # TODO: Add num_cls and scale_factor
+        num_cls = 3
+        scale_factor = [10., 10., 5., 5.]
+        bbox_pred = tf.reshape(bbox_pred, [-1, num_cls + 1, 4])
         bbox_pred = tf.stop_gradient(bbox_pred)
-        cls_prob = tf.stop_gradient(cls_prob)
+        scores = tf.stop_gradient(scores)
 
+        bboxes_pred_list = tf.unstack(bbox_pred, axis=1)
+        score_list = tf.unstack(scores)
 
+        all_cls_bboxex = []
+        all_cls_scores = []
+        categories = []
+
+        for i in range(num_cls + 1):
+            encoded_bbox = bboxes_pred_list[i]
+            score = score_list[i]
+
+            decoded_bbox = decode_bboxes(encoded_bbox, rois, scale_factor=scale_factor)
+
+            # clip bounding to image shape
+            predict_x_min, predict_y_min, predict_x_max, predict_y_max = tf.unstack(decoded_bbox)
+            image_height, image_width = image_shape
+            predict_x_min = tf.maximum(0, tf.minimum(image_width - 1, predict_x_min))
+            predict_y_min = tf.maximum(0, tf.minimum(image_height - 1, predict_y_min))
+
+            predict_x_max = tf.maximum(0, tf.minimum(image_width - 1, predict_x_max))
+            predict_y_max = tf.maximum(0, tf.minimum(image_height - 1, predict_y_max))
+
+            predict_bboxes = tf.transpose(tf.stack([predict_x_min, predict_y_min, predict_x_max, predict_y_max]))
+
+            # NMS
+            # TODO: Add faster rcnn nms configs
+            FAST_RCNN_NMS_IOU_THRESHOLD = 0.3  # 0.6
+            FAST_RCNN_NMS_MAX_BOXES_PER_CLASS = 100
+            keep_ind = tf.image.non_max_suppression(predict_bboxes, score,
+                                                    FAST_RCNN_NMS_MAX_BOXES_PER_CLASS,
+                                                    FAST_RCNN_NMS_IOU_THRESHOLD)
+
+            per_cls_boxes = tf.gather(predict_bboxes, keep_ind)
+            per_cls_scores = tf.gather(score, keep_ind)
+
+            all_cls_bboxex.append(per_cls_boxes)
+            all_cls_scores.append(per_cls_scores)
+            categories.append(tf.ones_like(per_cls_scores) * i)
+
+        final_bboxes = tf.concat(all_cls_bboxex, axis=0)
+        final_scores = tf.concat(all_cls_scores, axis=0)
+        final_categories = tf.concat(categories, axis=0)
+
+        return final_bboxes, final_scores, final_categories
 
 
 def roi_pooling(features, rois, image_shape):
@@ -63,3 +112,9 @@ def _normalize_rois(rois, img_h, img_w):
     normalized_rois = tf.transpose(tf.stack([normalized_x1, normalized_y1, normalized_x2, normalized_y2]))
 
     return tf.stop_gradient(normalized_rois)
+
+
+def build_faster_rcnn_losses(bbox_pred, bbox_targets, cls_score, labels, num_cls):
+    bbox_loss = smooth_l1_loss_rcnn(bbox_pred, bbox_targets, labels, num_cls)
+    cls_loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=cls_score, labels=labels))
+    return bbox_loss, cls_loss

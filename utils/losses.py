@@ -1,41 +1,6 @@
 import tensorflow as tf
 
 
-def build_rpn_losses(rpn_cls_score, rpn_cls_prob, rpn_bbox_pred, rpn_bbox_targets, rpn_labels):
-    """
-
-    :param rpn_cls_score:
-    :param rpn_cls_prob:
-    :param rpn_bbox_pred:
-    :param rpn_bbox_targets:
-    :param rpn_labels:
-    :return: rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss
-    """
-    with tf.variable_scope('RPN_LOSSES'):
-        # calculate class accuracy
-        rpn_cls_category = tf.argmax(rpn_cls_prob, axis=1)  # get 0 or 1 to represent the background or foreground
-
-        # exclude not care labels
-        calculated_rpn_target_indexes = tf.reshape(tf.where(tf.not_equal(rpn_labels, -1))[0], [-1])
-
-        rpn_cls_category = tf.cast(tf.gather(rpn_cls_category, calculated_rpn_target_indexes), dtype=tf.float32)
-        gt_labels = tf.cast(tf.gather(rpn_labels, calculated_rpn_target_indexes), dtype=tf.float32)
-
-        # rpn class loss
-        rpn_cls_acc = tf.reduce_mean(tf.equal(rpn_cls_category, gt_labels))
-        rpn_cls_loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(labels=gt_labels,
-                                                                                     logits=rpn_cls_score,
-                                                                                     name='rpn_cls_loss'))
-
-        rpn_bbox_loss = _smooth_l1_loss_rpn(rpn_bbox_pred, rpn_bbox_targets, rpn_labels)
-
-        return rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss
-
-
-def build_rcnn_loss(bbox_pred, bbox_targets, labels, num_cls, sigma=1.0):
-    pass
-
-
 def _smooth_l1_loss(bbox_pred, bbox_targets, sigma=1.0):
     """
     Refer jemmy li zengarden2009@gmail.com losses.py
@@ -54,8 +19,8 @@ def _smooth_l1_loss(bbox_pred, bbox_targets, sigma=1.0):
     return loss_box
 
 
-def _smooth_l1_loss_rpn(bbox_pred, bbox_targets, rpn_labels, sigma=1.0):
-    value = _smooth_l1_loss(bbox_pred, bbox_targets)
+def smooth_l1_loss_rpn(bbox_pred, bbox_targets, rpn_labels, sigma=1.0):
+    value = _smooth_l1_loss(bbox_pred, bbox_targets, sigma)
     value = tf.reduce_sum(value, axis=1)
 
     rpn_select = tf.where(tf.greater(rpn_labels, 0))
@@ -64,4 +29,27 @@ def _smooth_l1_loss_rpn(bbox_pred, bbox_targets, rpn_labels, sigma=1.0):
     non_ignored_mask = tf.stop_gradient(1.0 - tf.to_float(tf.equal(rpn_labels, -1)))
 
     bbox_loss = tf.reduce_sum(selected_value) / tf.maximum(1.0, tf.reduce_sum(non_ignored_mask))
+    return bbox_loss
+
+
+def smooth_l1_loss_rcnn(bbox_pred, bbox_targets, label, num_classes, sigma=1.0):
+    outside_mask = tf.stop_gradient(tf.to_float(tf.greater(label, 0)))
+
+    bbox_pred = tf.reshape(bbox_pred, [-1, num_classes, 4])
+    bbox_targets = tf.reshape(bbox_targets, [-1, num_classes, 4])
+
+    value = _smooth_l1_loss(bbox_pred, bbox_targets, sigma)
+    value = tf.reduce_sum(value, 2)
+    value = tf.reshape(value, [-1, num_classes])
+
+    inside_mask = tf.one_hot(tf.reshape(label, [-1, 1]),
+                             depth=num_classes, axis=1)
+
+    inside_mask = tf.stop_gradient(
+        tf.to_float(tf.reshape(inside_mask, [-1, num_classes])))
+
+    normalizer = tf.to_float(tf.shape(bbox_pred)[0])
+    bbox_loss = tf.reduce_sum(
+        tf.reduce_sum(value * inside_mask, 1) * outside_mask) / normalizer
+
     return bbox_loss

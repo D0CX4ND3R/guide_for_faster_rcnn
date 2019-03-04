@@ -3,96 +3,25 @@ from tensorflow.contrib import slim
 
 import numpy as np
 
-from utils.anchor_utils import anchors2bboxes, bboxes2anchors, decode_bboxes, encode_bboxes
-from utils.losses import build_rpn_losses
+from utils.anchor_utils import encode_bboxes, generate_anchors
+from utils.losses import smooth_l1_loss_rpn
+
+import faster_rcnn_configs as frc
 
 
-class RpnConfig(object):
-    def __init__(self, class_count):
-        self.scale = [0.5, 1, 2]
-        self.size = [128, 256, 512]
-        self.cls_count = class_count
-
-    @property
-    def anchor_num(self):
-        return len(self.scale) * len(self.size)
-
-    @property
-    def class_count(self):
-        return self.cls_count
-
-    @property
-    def rpn_iou_positive_threshold(self):
-        return self.rpn_iou_positive_th
-
-
-def _cls():
-    pass
-
-
-def _reg():
-    pass
-
-
-def generate_anchors(original_anchor=None, scales=None, ratios=None):
-    if ratios is None:
-        ratios = [0.5, 1, 2]
-    if scales is None:
-        scales = [8, 16, 32]
-    if original_anchor is None:
-        original_anchor = [0, 0, 15, 15]
-
-    def _gen_anchors(width, height):
-        wn = np.repeat(width, len(scales)) * np.array(scales)
-        hn = np.repeat(height, len(scales)) * np.array(scales)
-
-        wn = wn[:, np.newaxis]
-        hn = hn[:, np.newaxis]
-        return np.hstack([x_center - (wn - 1) / 2, y_center - (hn - 1) / 2,
-                          x_center + (wn - 1) / 2, y_center + (hn - 1) / 2])
-
-    # calculate original anchor's width, height and center coordinate
-    w = original_anchor[2] - original_anchor[0] + 1
-    h = original_anchor[3] - original_anchor[1] + 1
-    x_center = original_anchor[0] + (w - 1) / 2
-    y_center = original_anchor[1] + (h - 1) / 2
-
-    # calculate the original anchor's area
-    original_area = w * h
-
-    # calculate the three ratios areas
-    three_ratios_area = original_area * np.array(ratios)
-
-    # calculate the three kinds of areas width and height
-    three_ratios_width = np.round(np.sqrt(three_ratios_area))
-    three_ratios_height = three_ratios_width / np.array(ratios)
-
-    # calculate anchors, each anchors coordinate is [x1, y1, x2, y2]
-    # (x1, y1)-----------------------------------------
-    # |                                                |
-    # |                                                |
-    # |                                                |
-    # |                                                |
-    # |                                                |
-    # ------------------------------------------(x2, y2)
-    anchors = [_gen_anchors(wr, hr) for wr, hr in zip(three_ratios_width, three_ratios_height)]
-
-    return np.vstack(anchors)
-
-
-def rpn(features, image_shape, gt_bboxes, rpn_config=RpnConfig(2)):
+def rpn(features, image_shape, gt_bboxes):
     with tf.variable_scope('rpn'):
         # rpn_cls_score
-        rpn_cls_score = slim.conv2d(features, 2 * rpn_config.anchor_num, [1, 1],
+        rpn_cls_score = slim.conv2d(features, 2 * frc.ANCHOR_NUM, [1, 1],
                                     normalizer_fn=slim.batch_norm,
-                                    normalizer_params={'decacy': 0.995, 'epsilon': 0.0001},
-                                    weights_regularizer=tf.nn.l2_normalize(0.0005),
+                                    normalizer_params={'decacy': frc.RPN_BN_DECACY, 'epsilon': frc.RPN_BN_EPS},
+                                    weights_regularizer=tf.nn.l2_normalize(frc.RPN_WEIGHTS_L2_PENALITY_FACTOR),
                                     activation_fn=None, scope='rpn_cls_score')
         rpn_cls_score = tf.reshape(rpn_cls_score, [-1, 2])
         rpn_cls_prob = slim.softmax(rpn_cls_score, scope='rpn_cls_pred')
 
         # rpn_bbox_pred
-        rpn_bbox_pred = slim.conv2d(features, rpn_config.anchor_num * rpn_config.class_count, [1, 1],
+        rpn_bbox_pred = slim.conv2d(features, frc.ANCHOR_NUM * (frc.NUM_CLS + 1), [1, 1],
                                     activation_fn=None, scope='rpn_bbox_pred')
         rpn_bbox_pred = tf.reshape(rpn_bbox_pred, [-1, 4])
 
@@ -100,9 +29,8 @@ def rpn(features, image_shape, gt_bboxes, rpn_config=RpnConfig(2)):
         featuremap_height = tf.cast(featuremap_height, dtype=tf.float32)
         featuremap_width = tf.cast(featuremap_width, dtype=tf.float32)
 
-        # TODO: Modified the anchor settings
-        # generate anchors
-        anchors = make_anchors_in_image(16, featuremap_width, featuremap_height, feature_stride=8)
+        anchors = make_anchors_in_image(frc.ANCHOR_BASE_SIZE, featuremap_width, featuremap_height,
+                                        feature_stride=frc.FEATURE_STRIDE)
 
         # TODO: Add summary
 
@@ -128,9 +56,7 @@ def rpn(features, image_shape, gt_bboxes, rpn_config=RpnConfig(2)):
 
             rois = tf.reshape(rois, [-1, 4])
             labels = tf.reshape(tf.to_int32(labels), [-1])
-            # TODO: Set class numbers NUM_CLASS
-            num_class = 3
-            bbox_targets = tf.reshape(bbox_targets, [-1, 4 * (num_class + 1)])
+            bbox_targets = tf.reshape(bbox_targets, [-1, 4 * (frc.NUM_CLS + 1)])
 
     return rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss, rois, labels, bbox_targets
 
@@ -145,19 +71,14 @@ def process_proposal_targets(rpn_rois, gt_bboxes):
     """
     # rpn rois: [x1, y1, x2, y2]
     # ground truth: [x1, y1, x2, y2, label]
-    # TODO: Set a modify to consider add gt_bboxes to train rpn.
-    add_gtbox_to_train = False
-    if add_gtbox_to_train:
+    if frc.ADD_GT_BOX_TO_TRAIN:
         all_rois = np.concatenate([rpn_rois, gt_bboxes[:, :-1]], axis=0)
     else:
         all_rois = rpn_rois
 
-    # TODO: Add config for fast rcnn minibatch size
-    fast_rcnn_minibatch_size = 256
-    rois_per_image = np.inf if fast_rcnn_minibatch_size == -1 else fast_rcnn_minibatch_size
+    rois_per_image = np.inf if frc.FASTER_RCNN_MINIBATCH_SIZE == -1 else frc.FASTER_RCNN_MINIBATCH_SIZE
 
-    fast_rcnn_positive_rate = 0.25
-    fg_rois_per_image = np.round(fast_rcnn_positive_rate * rois_per_image)
+    fg_rois_per_image = np.round(frc.FASTER_RCNN_POSITIVE_RATE * rois_per_image)
 
     # Sample rois with classification labels and bounding box regression.
     # TODO: Add class count in config.
@@ -174,21 +95,18 @@ def process_proposal_targets(rpn_rois, gt_bboxes):
     # 3. Set overlap iou larger than iou threshold as positive sample, and less than threshold as negative samples.
     # IOU > POSITIVE_THRESHOLD = 0.5 => POSITIVE
     # 0 = NEGATIVE_THRESHOLD < IOU < POSITIVE_THRESHOLD = 0.5 => NEGATIVE
-    # 4. Let the total numbers of rois equal to the ROIS_PER_IMAGE = FOREGROUND_ROIS_PER_IMAGE + BACKGROUND_ROIS_PER_IMAGE
-    # TODO: Add iou threshold to chose positive foreground and negative background
-    # temp BEGIN
-    iou_positive_iou_threshold = 0.5
-    iou_negative_iou_threshold = 0.0
-    # temp END
+    # 4. Let the total numbers of rois equal to the
+    # ROIS_PER_IMAGE = FOREGROUND_ROIS_PER_IMAGE + BACKGROUND_ROIS_PER_IMAGE
+
     # chose foreground indices
-    fg_indices = np.where(max_overlaps >= iou_positive_iou_threshold)[0]
+    fg_indices = np.where(max_overlaps >= frc.FASTER_RCNN_IOU_POSITIVE_THRESHOLD)[0]
     fg_rois_per_image = np.minimum(fg_rois_per_image, fg_indices.size)
     if fg_indices.size > 0:
         fg_indices = np.random.choice(fg_indices, size=int(fg_rois_per_image), replace=False)
 
     # chose background indices
-    bg_indices = np.where((max_overlaps < iou_positive_iou_threshold) &
-                          (max_overlaps >= iou_negative_iou_threshold))[0]
+    bg_indices = np.where((max_overlaps < frc.FASTER_RCNN_IOU_POSITIVE_THRESHOLD) &
+                          (max_overlaps >= frc.FASTER_RCNN_IOU_NEGATIVE_THRESHOLD))[0]
     bg_roi_per_image = rois_per_image - fg_rois_per_image
     bg_roi_per_image = np.minimum(bg_roi_per_image, bg_indices.size)
 
@@ -206,9 +124,7 @@ def process_proposal_targets(rpn_rois, gt_bboxes):
     bbox_targets_data = encode_bboxes(rois, gt_bboxes[max_overlaps_gt_indexes[keep_indices], :-1])
     # bbox_targets_data = np.hstack([labels[:, np.newaxis], bbox_targets_data]).astype(np.float32, copy=False)
 
-    # TODO: Set class number.
-    num_class = 3 + 1
-    bbox_targets = np.zeros((labels.size, 4 * num_class), dtype=np.float32)
+    bbox_targets = np.zeros((labels.size, 4 * (frc.NUM_CLS + 1)), dtype=np.float32)
     inds = np.where(labels > 0)[0]
     for i in inds:
         cls = labels[i]
@@ -331,12 +247,12 @@ def generate_rpn_labels(all_anchors, gt_bboxes, image_shape):
     max_overlap_indexes = np.where(max_overlap_anchor == max_overlaps_gt)[0]
 
     labels[max_overlap_indexes] = 1
-    # TODO: Modify CONFIG
+
     # Set negative labels
-    labels[max_overlaps_gt < 0.3] = 0
+    labels[max_overlaps_gt < frc.RPN_IOU_NEGATIVE_THRESHOLD] = 0
 
     # Set positive labels
-    labels[max_overlaps_gt >= 0.7] = 1
+    labels[max_overlaps_gt >= frc.RPN_IOU_POSITIVE_THRESHOLD] = 1
 
     foreground_background_limit(labels)
 
@@ -352,9 +268,9 @@ def generate_rpn_labels(all_anchors, gt_bboxes, image_shape):
 
 
 def foreground_background_limit(labels):
-    fg_num = int(0.5 * 2000)
-    bg_num = int(0.5 * 2000)
-    # TODO: Set limitation number of foreground and background.
+    fg_num = int(frc.RPN_MINIBATCH_SIZE * frc.RPN_FOREGROUND_FRACTION)
+    bg_num = int(frc.RPN_MINIBATCH_SIZE - fg_num)
+
     fg_indexes = np.where(labels == 1)[0]
     bg_indexes = np.where(labels == 0)[0]
 
@@ -414,34 +330,32 @@ def get_overlaps_py(pred_bboxes, gt_bboxes):
     return ious.reshape([len_pred_bboxes, len_gt_bboxes])
 
 
-if __name__ == '__main__':
-    a = generate_anchors([0, 0, 15, 15])
-    import matplotlib.pyplot as plt
+def build_rpn_losses(rpn_cls_score, rpn_cls_prob, rpn_bbox_pred, rpn_bbox_targets, rpn_labels):
+    """
 
+    :param rpn_cls_score:
+    :param rpn_cls_prob:
+    :param rpn_bbox_pred:
+    :param rpn_bbox_targets:
+    :param rpn_labels:
+    :return: rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss
+    """
+    with tf.variable_scope('RPN_LOSSES'):
+        # calculate class accuracy
+        rpn_cls_category = tf.argmax(rpn_cls_prob, axis=1)  # get 0 or 1 to represent the background or foreground
 
-    def draw_rectangle(ax, anchor, color):
-        x1 = anchor[0]
-        y1 = anchor[1]
-        x2 = anchor[2]
-        y2 = anchor[3]
-        ax.hlines(y1, x1, x2, colors=color)
-        ax.hlines(y2, x1, x2, colors=color)
-        ax.vlines(x1, y1, y2, colors=color)
-        ax.vlines(x2, y1, y2, colors=color)
+        # exclude not care labels
+        calculated_rpn_target_indexes = tf.reshape(tf.where(tf.not_equal(rpn_labels, -1))[0], [-1])
 
+        rpn_cls_category = tf.cast(tf.gather(rpn_cls_category, calculated_rpn_target_indexes), dtype=tf.float32)
+        gt_labels = tf.cast(tf.gather(rpn_labels, calculated_rpn_target_indexes), dtype=tf.float32)
 
-    colors = ['b', 'g', 'r'] * 3
-    fig = plt.figure()
-    ax = fig.add_subplot(111)
-    for anchor, color in zip(a, colors):
-        draw_rectangle(ax, anchor, color)
-        x_ctr = (anchor[0] + anchor[2]) / 2
-        y_ctr = (anchor[1] + anchor[3]) / 2
-        print('center:')
-        print('x=', x_ctr, 'y=', y_ctr)
-        print('area:', (anchor[2] - anchor[0] + 1) * (anchor[3] - anchor[1] + 1))
-        print('w=', anchor[2] - anchor[0] + 1, 'h=', anchor[3] - anchor[1] + 1)
-        ax.scatter(x_ctr, y_ctr, c=color)
-    ax.set_aspect('equal')
-    plt.show()
+        # rpn class loss
+        rpn_cls_acc = tf.reduce_mean(tf.equal(rpn_cls_category, gt_labels))
+        rpn_cls_loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(labels=gt_labels,
+                                                                                     logits=rpn_cls_score,
+                                                                                     name='rpn_cls_loss'))
 
+        rpn_bbox_loss = smooth_l1_loss_rpn(rpn_bbox_pred, rpn_bbox_targets, rpn_labels)
+
+    return rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss

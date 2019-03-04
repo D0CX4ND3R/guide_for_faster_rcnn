@@ -5,6 +5,8 @@ from tensorflow.contrib import slim
 _bn_params = {'decay': 0.995, 'epsilon': 0.0001}
 _l2_weight = 0.0005
 
+STRIDE_SIZE = 16
+
 
 def _preprocess(inputs, input_size):
     return inputs
