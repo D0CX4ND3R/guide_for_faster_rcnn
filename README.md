@@ -11,10 +11,10 @@ opencv >= 3.4.0
 python train.py
 
 # Others
-The backbone uses ResNeXt-50, now only support batch_size=1.
+The backbone is ResNeXt-50, now only supporting batch_size=1.
 
 # Need to fix
-Nan will appeares during training the RPN.
+Nan appeares during training the RPN.
 
 # Next
 * Add test codes.
