@@ -1,5 +1,6 @@
 # Guide for building faster rcnn
-Reproduction of Faster R-CNN by tensorflow. Guide to build an own Faster R-CNN.
+Reproduction of Faster R-CNN by tensorflow. Guide to build an own Faster R-CNN. 
+For learning and communication.
 Train a toy dataset generates circles, rectangles and triangles.
 
 # Requires
