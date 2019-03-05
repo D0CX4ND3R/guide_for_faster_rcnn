@@ -5,25 +5,25 @@ import resnext50
 from utils.anchor_utils import decode_bboxes
 from utils.losses import smooth_l1_loss_rcnn
 
+import faster_rcnn_configs as frc
+
 
 def faster_rcnn(features, rois, image_shape, is_training=True):
-    # ROI Pooling
-    roi_features = roi_pooling(features, rois, image_shape)
+    with tf.variable_scope('rcnn'):
+        # ROI Pooling
+        roi_features = roi_pooling(features, rois, image_shape)
 
-    # Fully connected
-    net_flatten = resnext50.resnext_head(roi_features)
+        # Fully connected
+        net_flatten = resnext50.resnext_head(roi_features)
 
-    # TODO: Add num class
-    num_cls = 3
+        with slim.arg_scope([slim.fully_connected], weights_regularizer=slim.l2_regularizer(0.0005),
+                            weights_initializer=slim.variance_scaling_initializer(1.0, mode='FAN_AVG', uniform=True),
+                            activation_fn=None, trainable=is_training):
+            cls_score = slim.fully_connected(net_flatten, frc.NUM_CLS + 1, scope='cls_fc')
+            bbox_pred = slim.fully_connected(net_flatten, 4 * (frc.NUM_CLS + 1), scope='reg_fc')
 
-    with slim.arg_scope([slim.fully_connected], weights_regularizer=slim.l2_regularizer(0.0005),
-                        weights_initializer=slim.variance_scaling_initializer(1.0, mode='FAN_AVG', uniform=True),
-                        activation_fn=None, trainable=is_training):
-        cls_score = slim.fully_connected(net_flatten, num_cls + 1, scope='cls_fc')
-        bbox_pred = slim.fully_connected(net_flatten, 4 * (num_cls + 1), scope='reg_fc')
-
-        cls_score = tf.reshape(cls_score, [-1, num_cls + 1])
-        bbox_pred = tf.reshape(bbox_pred, [-1, 4 * (num_cls + 1)])
+            cls_score = tf.reshape(cls_score, [-1, frc.NUM_CLS + 1])
+            bbox_pred = tf.reshape(bbox_pred, [-1, 4 * (frc.NUM_CLS + 1)])
 
     return cls_score, bbox_pred
 
@@ -31,44 +31,39 @@ def faster_rcnn(features, rois, image_shape, is_training=True):
 def process_faster_rcnn(rois, bbox_pred, scores, image_shape):
     with tf.variable_scope('postprocess_faster_rcnn'):
         rois = tf.stop_gradient(rois)
-        # TODO: Add num_cls and scale_factor
-        num_cls = 3
         scale_factor = [10., 10., 5., 5.]
-        bbox_pred = tf.reshape(bbox_pred, [-1, num_cls + 1, 4])
+        bbox_pred = tf.reshape(bbox_pred, [-1, frc.NUM_CLS + 1, 4])
         bbox_pred = tf.stop_gradient(bbox_pred)
         scores = tf.stop_gradient(scores)
 
         bboxes_pred_list = tf.unstack(bbox_pred, axis=1)
-        score_list = tf.unstack(scores)
+        score_list = tf.unstack(scores, axis=1)
 
         all_cls_bboxex = []
         all_cls_scores = []
         categories = []
 
-        for i in range(num_cls + 1):
+        for i in range(frc.NUM_CLS + 1):
             encoded_bbox = bboxes_pred_list[i]
             score = score_list[i]
 
             decoded_bbox = decode_bboxes(encoded_bbox, rois, scale_factor=scale_factor)
 
             # clip bounding to image shape
-            predict_x_min, predict_y_min, predict_x_max, predict_y_max = tf.unstack(decoded_bbox)
-            image_height, image_width = image_shape
-            predict_x_min = tf.maximum(0, tf.minimum(image_width - 1, predict_x_min))
-            predict_y_min = tf.maximum(0, tf.minimum(image_height - 1, predict_y_min))
+            predict_x_min, predict_y_min, predict_x_max, predict_y_max = tf.unstack(decoded_bbox, axis=1)
+            image_height, image_width = tf.to_float(image_shape[0]), tf.to_float(image_shape[1])
+            predict_x_min = tf.maximum(0., tf.minimum(image_width - 1, predict_x_min))
+            predict_y_min = tf.maximum(0., tf.minimum(image_height - 1, predict_y_min))
 
-            predict_x_max = tf.maximum(0, tf.minimum(image_width - 1, predict_x_max))
-            predict_y_max = tf.maximum(0, tf.minimum(image_height - 1, predict_y_max))
+            predict_x_max = tf.maximum(0., tf.minimum(image_width - 1, predict_x_max))
+            predict_y_max = tf.maximum(0., tf.minimum(image_height - 1, predict_y_max))
 
             predict_bboxes = tf.transpose(tf.stack([predict_x_min, predict_y_min, predict_x_max, predict_y_max]))
 
             # NMS
-            # TODO: Add faster rcnn nms configs
-            FAST_RCNN_NMS_IOU_THRESHOLD = 0.3  # 0.6
-            FAST_RCNN_NMS_MAX_BOXES_PER_CLASS = 100
             keep_ind = tf.image.non_max_suppression(predict_bboxes, score,
-                                                    FAST_RCNN_NMS_MAX_BOXES_PER_CLASS,
-                                                    FAST_RCNN_NMS_IOU_THRESHOLD)
+                                                    frc.FASTER_RCNN_NMS_MAX_BOX_PER_CLASS,
+                                                    frc.FASTER_RCNN_NMS_IOU_THRESHOLD)
 
             per_cls_boxes = tf.gather(predict_bboxes, keep_ind)
             per_cls_scores = tf.gather(score, keep_ind)
@@ -90,14 +85,12 @@ def roi_pooling(features, rois, image_shape):
 
     normalized_rois = _normalize_rois(rois, img_h, img_w)
 
-    # TODO: Add settings for crop size ROI_SIZE, roi pooling kernel size ROI_POOLING_KERNEL_SIZE
-    roi_size = 14
-    roi_pooling_kernel_size = 2
     cropped_roi_features = tf.image.crop_and_resize(features, normalized_rois, tf.zeros((N,), tf.int32),
-                                                    crop_size=[roi_size, roi_size])
+                                                    crop_size=[frc.FASTER_RCNN_ROI_SIZE, frc.FASTER_RCNN_ROI_SIZE])
 
-    roi_features = slim.max_pool2d(cropped_roi_features, [roi_pooling_kernel_size, roi_pooling_kernel_size],
-                                   stride=roi_pooling_kernel_size)
+    roi_features = slim.max_pool2d(cropped_roi_features,
+                                   kernel_size=[frc.FASTER_RCNN_POOL_KERNEL_SIZE, frc.FASTER_RCNN_POOL_KERNEL_SIZE],
+                                   stride=frc.FASTER_RCNN_POOL_KERNEL_SIZE)
     return roi_features
 
 

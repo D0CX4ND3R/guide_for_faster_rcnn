@@ -35,7 +35,8 @@ def generate_shape_image(image_size, n=5):
         if labels[i] == 0:
             image = cv2.circle(image, (data[0][0], data[0][1]), data[1], color, -1)
         elif labels[i] == 1:
-            image = cv2.rectangle(image, data[0], data[1], color, -1)
+            # print(data[0], data[1])
+            image = cv2.rectangle(image, (data[0][0], data[0][1]), (data[1][0], data[1][1]), color, -1)
         else:
             image = cv2.fillConvexPoly(image, data, color)
     return image, bboxes, labels, areas
@@ -73,8 +74,10 @@ def _gen_shape(image_shape, center_pos, radius, shape_type=None):
     elif shape_type == 1:
         w = radius
         h = (np.random.rand() + 0.5) * w
-        pt1 = (int(center_pos[0] - w // 2), int(center_pos[1] - h // 2))
-        pt2 = (int(center_pos[0] + w // 2), int(center_pos[1] + h // 2))
+        pt1 = (int(np.maximum(0, center_pos[0] - w // 2)),
+               int(np.minimum(img_w, center_pos[1] - h // 2)))
+        pt2 = (int(np.maximum(0, center_pos[0] + w // 2)),
+               int(np.minimum(img_h, center_pos[1] + h // 2)))
         rect = [pt1[0], pt1[1], pt2[0], pt2[1]]
         area = _calc_box_area(rect)
         data = [pt1, pt2]

@@ -14,8 +14,8 @@ def rpn(features, image_shape, gt_bboxes):
         # rpn_cls_score
         rpn_cls_score = slim.conv2d(features, 2 * frc.ANCHOR_NUM, [1, 1],
                                     normalizer_fn=slim.batch_norm,
-                                    normalizer_params={'decacy': frc.RPN_BN_DECACY, 'epsilon': frc.RPN_BN_EPS},
-                                    weights_regularizer=tf.nn.l2_normalize(frc.RPN_WEIGHTS_L2_PENALITY_FACTOR),
+                                    normalizer_params={'decay': frc.RPN_BN_DECACY, 'epsilon': frc.RPN_BN_EPS},
+                                    weights_regularizer=slim.l2_regularizer(frc.RPN_WEIGHTS_L2_PENALITY_FACTOR),
                                     activation_fn=None, scope='rpn_cls_score')
         rpn_cls_score = tf.reshape(rpn_cls_score, [-1, 2])
         rpn_cls_prob = slim.softmax(rpn_cls_score, scope='rpn_cls_pred')
@@ -35,7 +35,7 @@ def rpn(features, image_shape, gt_bboxes):
         # TODO: Add summary
 
         # generate labels and bboxes to train rpn
-        rpn_labels, rpn_bbox_targets = tf.py_func(generate_rpn_labels, [anchors, gt_bboxes, image_shape],
+        rpn_bbox_targets, rpn_labels = tf.py_func(generate_rpn_labels, [anchors, gt_bboxes, image_shape],
                                                   [tf.float32, tf.float32])
         rpn_labels = tf.to_int32(rpn_labels)
         rpn_labels = tf.reshape(rpn_labels, [-1])
@@ -47,12 +47,12 @@ def rpn(features, image_shape, gt_bboxes):
                                                                     rpn_labels)
 
         # TODO: Add summary
-        # RCNN part
+        # Get RCNN rois
         with tf.control_dependencies([rpn_labels]):
             # process rpn proposals, including clip, decode, nms
             rois, roi_scores = process_rpn_proposals(anchors, rpn_cls_prob, rpn_bbox_pred, image_shape)
             rois, labels, bbox_targets = tf.py_func(process_proposal_targets, [rois, gt_bboxes],
-                                                    [tf.float32, tf.float32, tf.float32])
+                                                    [tf.float32, tf.int32, tf.float32])
 
             rois = tf.reshape(rois, [-1, 4])
             labels = tf.reshape(tf.to_int32(labels), [-1])
@@ -130,7 +130,7 @@ def process_proposal_targets(rpn_rois, gt_bboxes):
         cls = labels[i]
         start = int(4 * cls)
         end = start + 4
-        bbox_targets[i, start:end] = bbox_targets_data[i, 1:]
+        bbox_targets[i, start:end] = bbox_targets_data[i, 0:]
 
     return rois, labels, bbox_targets
 
@@ -145,7 +145,7 @@ def process_rpn_proposals(anchors, rpn_cls_pred, rpn_bbox_pred, image_shape, sca
         t_w /= scale_factor[2]
         t_h /= scale_factor[3]
 
-    anchors_x_min, anchors_y_mgenerate_anchorsin, anchors_x_max, anchors_y_max = tf.unstack(anchors, axis=1)
+    anchors_x_min, anchors_y_min, anchors_x_max, anchors_y_max = tf.unstack(anchors, axis=1)
     anchors_width = anchors_x_max - anchors_x_min
     anchors_height = anchors_y_max - anchors_y_min
     anchors_center_x = anchors_x_min + anchors_width / 2.0
@@ -170,17 +170,17 @@ def process_rpn_proposals(anchors, rpn_cls_pred, rpn_bbox_pred, image_shape, sca
     predict_y_max = predict_center_y + predict_height / 2
 
     # 2. Clip bounding boxes, make all boxes in the bounding of image
-    image_height, image_width = image_shape
-    predict_x_min = tf.maximum(0, tf.minimum(image_width-1, predict_x_min))
-    predict_y_min = tf.maximum(0, tf.minimum(image_height-1, predict_y_min))
+    image_height, image_width = tf.to_float(image_shape[0]), tf.to_float(image_shape[1])
+    predict_x_min = tf.maximum(0., tf.minimum(image_width-1, predict_x_min))
+    predict_y_min = tf.maximum(0., tf.minimum(image_height-1, predict_y_min))
 
-    predict_x_max = tf.maximum(0, tf.minimum(image_width-1, predict_x_max))
-    predict_y_max = tf.maximum(0, tf.minimum(image_height-1, predict_y_max))
+    predict_x_max = tf.maximum(0., tf.minimum(image_width-1, predict_x_max))
+    predict_y_max = tf.maximum(0., tf.minimum(image_height-1, predict_y_max))
 
     predict_bboxes = tf.transpose(tf.stack([predict_x_min, predict_y_min, predict_x_max, predict_y_max]))
 
-    predict_targets_count = tf.minimum(12000, tf.shape(predict_bboxes)[0])
-    sorted_rpn_cls_pred, sorted_pred_indeces = tf.nn.top_k(rpn_cls_pred, predict_targets_count)
+    predict_targets_count = tf.minimum(frc.RPN_TOP_K_NMS_TRAIN, tf.shape(predict_bboxes)[0])
+    sorted_rpn_cls_pred, sorted_pred_indeces = tf.nn.top_k(rpn_cls_pred[:, 1], predict_targets_count)
     sorted_bounding_boxes = tf.gather(predict_bboxes, sorted_pred_indeces)
 
     # 3. NMS
@@ -194,13 +194,15 @@ def process_rpn_proposals(anchors, rpn_cls_pred, rpn_bbox_pred, image_shape, sca
 
 def make_anchors_in_image(anchor_base, feature_width, feature_height, feature_stride):
     _anchors = generate_anchors(original_anchor=[1, 1, anchor_base - 1, anchor_base - 1])
-    shift_x = np.arange(feature_width) * feature_stride
-    shift_y = np.arange(feature_height) * feature_stride
-    shift_x, shift_y = np.meshgrid(shift_x, shift_y)
+    shift_x = tf.range(feature_width, dtype=tf.float32) * feature_stride
+    shift_y = tf.range(feature_height, dtype=tf.float32) * feature_stride
+    shift_x, shift_y = tf.meshgrid(shift_x, shift_y)
 
-    shifts = np.vstack([shift_x.ravel(), shift_y.ravel(), shift_x.ravel(), shift_y.ravel()]).transpose()
-    all_anchors = _anchors[np.newaxis, :, :] + shifts[:, np.newaxis, :]
-    return all_anchors.reshape(-1, 4)
+    shifts = tf.stack([tf.reshape(shift_x, [-1]), tf.reshape(shift_y, [-1]),
+                       tf.reshape(shift_x, [-1]), tf.reshape(shift_y, [-1])],
+                      axis=1)
+    all_anchors = _anchors[tf.newaxis, :, :] + shifts[:, tf.newaxis, :]
+    return tf.reshape(all_anchors, [-1, 4])
 
 
 def check_anchors(all_anchors, image_shape, allowed_boader=0):
@@ -215,7 +217,7 @@ def check_anchors(all_anchors, image_shape, allowed_boader=0):
 
 
 def generate_rpn_labels(all_anchors, gt_bboxes, image_shape):
-    def _umap(data, count, indexes, fill=0):
+    def _unmap(data, count, indexes, fill=0):
         if len(data.shape) == 1:
             ret = np.empty((count,), dtype=np.float32)
             ret.fill(fill)
@@ -254,12 +256,12 @@ def generate_rpn_labels(all_anchors, gt_bboxes, image_shape):
     # Set positive labels
     labels[max_overlaps_gt >= frc.RPN_IOU_POSITIVE_THRESHOLD] = 1
 
-    foreground_background_limit(labels)
+    labels = foreground_background_limit(labels)
 
-    bbox_targets = encode_bboxes(anchors, gt_bboxes[max_overlaps_gt, :])
+    bbox_targets = encode_bboxes(anchors, gt_bboxes[max_overlap_gt_indexes, :])
 
-    labels = _umap(labels, all_anchors.reshape[0], inside_boarder_indexes, fill=-1)
-    bbox_targets = _umap(bbox_targets, all_anchors.reshape[0], inside_boarder_indexes)
+    labels = _unmap(labels, all_anchors.shape[0], inside_boarder_indexes, fill=-1)
+    bbox_targets = _unmap(bbox_targets, all_anchors.shape[0], inside_boarder_indexes)
 
     bbox_targets = bbox_targets.reshape([-1, 4])
     labels = labels.reshape([-1, 1])
@@ -282,16 +284,7 @@ def foreground_background_limit(labels):
         disable_indexes = np.random.choice(bg_indexes, len(bg_indexes) - bg_num, replace=False)
         labels[disable_indexes] = -1
 
-
-def process_anchors(rpn_cls_pred, gt_bboxes, img_shape, all_anchors):
-    # Calculating the essential rpn labels, bboxes targets to train RPN by
-    # rpn_class_score
-    # ground_truth_boxes
-    # image_dims
-    # feat_stride (maybe means the zoom factor by backbone cnn)
-    # anchor_scales
-    # The anchor_target_layer is a well designed function to process this by many open source projects can be refer.
-    im_h, im_w = img_shape
+    return labels
 
 
 def get_overlaps_py(pred_bboxes, gt_bboxes):
@@ -345,13 +338,15 @@ def build_rpn_losses(rpn_cls_score, rpn_cls_prob, rpn_bbox_pred, rpn_bbox_target
         rpn_cls_category = tf.argmax(rpn_cls_prob, axis=1)  # get 0 or 1 to represent the background or foreground
 
         # exclude not care labels
-        calculated_rpn_target_indexes = tf.reshape(tf.where(tf.not_equal(rpn_labels, -1))[0], [-1])
+        calculated_rpn_target_indexes = tf.reshape(tf.where(tf.not_equal(rpn_labels, -1)), [-1])
 
-        rpn_cls_category = tf.cast(tf.gather(rpn_cls_category, calculated_rpn_target_indexes), dtype=tf.float32)
-        gt_labels = tf.cast(tf.gather(rpn_labels, calculated_rpn_target_indexes), dtype=tf.float32)
+        rpn_cls_category = tf.cast(tf.gather(rpn_cls_category, calculated_rpn_target_indexes), dtype=tf.int32)
+        gt_labels = tf.cast(tf.gather(rpn_labels, calculated_rpn_target_indexes), dtype=tf.int32)
 
         # rpn class loss
-        rpn_cls_acc = tf.reduce_mean(tf.equal(rpn_cls_category, gt_labels))
+        rpn_cls_acc = tf.reduce_mean(tf.cast(tf.equal(rpn_cls_category, gt_labels), dtype=tf.float32))
+
+        rpn_cls_score = tf.gather(rpn_cls_score, calculated_rpn_target_indexes)
         rpn_cls_loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(labels=gt_labels,
                                                                                      logits=rpn_cls_score,
                                                                                      name='rpn_cls_loss'))
@@ -359,3 +354,10 @@ def build_rpn_losses(rpn_cls_score, rpn_cls_prob, rpn_bbox_pred, rpn_bbox_target
         rpn_bbox_loss = smooth_l1_loss_rpn(rpn_bbox_pred, rpn_bbox_targets, rpn_labels)
 
     return rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss
+
+
+# if __name__ == '__main__':
+#     image_shape = [224, 224]
+#     anchors = generate_anchors()
+#     gt_bbox =
+#     generate_rpn_labels(anchors,)
