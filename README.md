@@ -1,6 +1,21 @@
 # Learn_Faster_RCNN
-Reproduction of Faster R-CNN by tensorflow. Learn how to build a Faster R-CNN.
+Reproduction of Faster R-CNN by tensorflow. Guide to build an own Faster R-CNN.
+Train a toy dataset generates circles, rectangles and triangles.
 
-Train with a toy dataset generate circles, rectangles and triangles.
+# Requires
+Tensorflow >= 1.11
+opencv >= 3.4.0
 
-Testing and training with other datasets will coming soon.
+# Usage
+python train.py
+
+# Others
+The backbone uses ResNeXt-50, now only support batch_size=1.
+
+# Need to fix
+Nan will appeares during training the RPN.
+
+# Next
+* Add test codes.
+* Fix Nan in training the RPN.
+* Training with other datasets as COCO or VOC.
