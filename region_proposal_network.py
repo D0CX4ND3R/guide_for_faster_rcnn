@@ -5,7 +5,6 @@ import numpy as np
 
 from utils.anchor_utils import encode_bboxes, generate_anchors
 from utils.losses import smooth_l1_loss_rpn
-from utils.image_draw import draw_rectangle
 
 import faster_rcnn_configs as frc
 
@@ -33,12 +32,6 @@ def rpn(features, image_shape, gt_bboxes):
         anchors = make_anchors_in_image(frc.ANCHOR_BASE_SIZE, featuremap_width, featuremap_height,
                                         feature_stride=frc.FEATURE_STRIDE)
 
-        # # TODO: Add summary
-        # display_anchors_img = tf.zeros(shape=[tf.to_int32(image_shape[0]), tf.to_int32(image_shape[1]), 3],
-        #                                dtype=tf.float32)
-        # display_anchors_img = tf.py_func(draw_rectangle, [display_anchors_img, anchors], [tf.uint8])
-        # tf.summary.image('anchors', display_anchors_img)
-
         # generate labels and bboxes to train rpn
         rpn_bbox_targets, rpn_labels = tf.py_func(generate_rpn_labels, [anchors, gt_bboxes, image_shape],
                                                   [tf.float32, tf.float32])
@@ -61,19 +54,6 @@ def rpn(features, image_shape, gt_bboxes):
             rois = tf.reshape(rois, [-1, 4])
             labels = tf.reshape(tf.to_int32(labels), [-1])
             bbox_targets = tf.reshape(bbox_targets, [-1, 4 * (frc.NUM_CLS + 1)])
-
-        # TODO: Add summary
-        display_rois_img = tf.zeros(shape=[tf.to_int32(image_shape[0]), tf.to_int32(image_shape[1]), 3])
-        display_positive_indices = tf.reshape(tf.where(tf.equal(labels, 1)), [-1])
-        display_negative_indices = tf.reshape(tf.where(tf.equal(labels, 0)), [-1])
-        display_positive_rois = tf.gather(rois, display_positive_indices)
-        display_negative_rois = tf.gather(rois, display_negative_indices)
-        display_positive_img = tf.py_func(draw_rectangle, [display_rois_img, display_positive_rois],
-                                          [tf.uint8])
-        display_negetive_img = tf.py_func(draw_rectangle, [display_rois_img, display_negative_rois],
-                                          [tf.uint8])
-        tf.summary.image('rpn_positive_rois', display_positive_img)
-        tf.summary.image('rpn_negative_rois', display_negetive_img)
 
     return rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss, rois, labels, bbox_targets
 
@@ -147,7 +127,7 @@ def process_proposal_targets(rpn_rois, gt_bboxes):
         cls = labels[i]
         start = int(4 * cls)
         end = start + 4
-        bbox_targets[i, start:end] = bbox_targets_data[i, 0:]
+        bbox_targets[i, start:end] = bbox_targets_data[i, :]
 
     return rois, labels, bbox_targets
 

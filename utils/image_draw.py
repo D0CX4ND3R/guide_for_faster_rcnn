@@ -30,6 +30,19 @@ def draw_rectangle(image, bboxes):
     return image
 
 
+def draw_rectangle2(image, bboxes):
+    image = np.uint8(image)
+    n = len(bboxes)
+    for i in range(n):
+        box = bboxes[i]
+        pt1 = (int(box[0]), int(box[1]))
+        pt2 = (int(box[2]), int(box[3]))
+
+        image = cv2.rectangle(image, pt1, pt2, (0, 0, 255), 1)
+
+    return image
+
+
 if __name__ == '__main__':
     img = np.zeros((448, 448, 3), dtype=np.float32)
 
