@@ -5,6 +5,7 @@ import numpy as np
 
 from utils.anchor_utils import encode_bboxes, generate_anchors
 from utils.losses import smooth_l1_loss_rpn
+from utils.image_draw import draw_rectangle
 
 import faster_rcnn_configs as frc
 
@@ -32,7 +33,11 @@ def rpn(features, image_shape, gt_bboxes):
         anchors = make_anchors_in_image(frc.ANCHOR_BASE_SIZE, featuremap_width, featuremap_height,
                                         feature_stride=frc.FEATURE_STRIDE)
 
-        # TODO: Add summary
+        # # TODO: Add summary
+        # display_anchors_img = tf.zeros(shape=[tf.to_int32(image_shape[0]), tf.to_int32(image_shape[1]), 3],
+        #                                dtype=tf.float32)
+        # display_anchors_img = tf.py_func(draw_rectangle, [display_anchors_img, anchors], [tf.uint8])
+        # tf.summary.image('anchors', display_anchors_img)
 
         # generate labels and bboxes to train rpn
         rpn_bbox_targets, rpn_labels = tf.py_func(generate_rpn_labels, [anchors, gt_bboxes, image_shape],
@@ -46,7 +51,6 @@ def rpn(features, image_shape, gt_bboxes):
                                                                     rpn_bbox_pred, rpn_bbox_targets,
                                                                     rpn_labels)
 
-        # TODO: Add summary
         # Get RCNN rois
         with tf.control_dependencies([rpn_labels]):
             # process rpn proposals, including clip, decode, nms
@@ -57,6 +61,19 @@ def rpn(features, image_shape, gt_bboxes):
             rois = tf.reshape(rois, [-1, 4])
             labels = tf.reshape(tf.to_int32(labels), [-1])
             bbox_targets = tf.reshape(bbox_targets, [-1, 4 * (frc.NUM_CLS + 1)])
+
+        # TODO: Add summary
+        display_rois_img = tf.zeros(shape=[tf.to_int32(image_shape[0]), tf.to_int32(image_shape[1]), 3])
+        display_positive_indices = tf.reshape(tf.where(tf.equal(labels, 1)), [-1])
+        display_negative_indices = tf.reshape(tf.where(tf.equal(labels, 0)), [-1])
+        display_positive_rois = tf.gather(rois, display_positive_indices)
+        display_negative_rois = tf.gather(rois, display_negative_indices)
+        display_positive_img = tf.py_func(draw_rectangle, [display_rois_img, display_positive_rois],
+                                          [tf.uint8])
+        display_negetive_img = tf.py_func(draw_rectangle, [display_rois_img, display_negative_rois],
+                                          [tf.uint8])
+        tf.summary.image('rpn_positive_rois', display_positive_img)
+        tf.summary.image('rpn_negative_rois', display_negetive_img)
 
     return rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss, rois, labels, bbox_targets
 
@@ -185,7 +202,8 @@ def process_rpn_proposals(anchors, rpn_cls_pred, rpn_bbox_pred, image_shape, sca
 
     # 3. NMS
     selected_bboxes_indeces = tf.image.non_max_suppression(sorted_bounding_boxes, sorted_rpn_cls_pred,
-                                                           image_shape[0] * image_shape[1])
+                                                           max_output_size=frc.RPN_PROPOSAL_MAX_TRAIN,
+                                                           iou_threshold=frc.RPN_NMS_IOU_THRESHOLD)
 
     selected_bboxes = tf.gather(sorted_bounding_boxes, selected_bboxes_indeces)
     selected_scores = tf.gather(sorted_rpn_cls_pred, selected_bboxes_indeces)
@@ -228,40 +246,51 @@ def generate_rpn_labels(all_anchors, gt_bboxes, image_shape):
             ret[indexes, :] = data
         return ret
 
-    inside_boarder_indexes = check_anchors(all_anchors, image_shape)
-    anchors = all_anchors[inside_boarder_indexes, :]
+    inside_boarder_indices = check_anchors(all_anchors, image_shape)
+    anchors = all_anchors[inside_boarder_indices, :]
 
     # labels: positive=1; negative=0; not_care=-1
-    labels = np.empty((len(inside_boarder_indexes),), dtype=np.float32)
+    labels = np.empty((len(inside_boarder_indices),), dtype=np.float32)
     labels.fill(-1)
 
     overlaps = get_overlaps_py(anchors, gt_bboxes)
     # overlaps: cross ious for each anchors and gt_boxes
     # rows: Anchors Indexes
     # columns: Ground Truth Bounding Box Indexes
-    # The indexes of ground truth bounding box have maximum overlap area for each anchors.
-    max_overlap_gt_indexes = np.argmax(overlaps, axis=1)
-    max_overlaps_gt = overlaps[np.arange(len(inside_boarder_indexes), dtype=np.int32), max_overlap_gt_indexes]
+    # For example K anchors with N ground truth bbox
+    # overlaps is matrix have shape of K * N
 
-    # The indexes of anchors with maximum overlap area with each ground truth bonding boxes.
-    max_overlap_anchor_indexes = np.argmax(overlaps, axis=0)
-    max_overlap_anchor = overlaps[max_overlap_anchor_indexes, np.arange(len(gt_bboxes), dtype=np.int32)]
-    max_overlap_indexes = np.where(max_overlap_anchor == max_overlaps_gt)[0]
+    # For each anchor, get gt_bbox indices have max overlap region.
+    # Shape: K
+    max_overlap_gt_indices = np.argmax(overlaps, axis=1)
+    # Get the max overlap for each anchor
+    max_overlaps_for_each_anchor = overlaps[np.arange(len(inside_boarder_indices), dtype=np.int32),
+                                            max_overlap_gt_indices]
 
-    labels[max_overlap_indexes] = 1
+    # For each gt_bbox, get anchor indices have max overlap region.
+    # Shape: N
+    max_overlap_anchor_indices = np.argmax(overlaps, axis=0)
+    # Get the max overlap for each gt_bbox
+    max_overlaps_for_each_gt = overlaps[max_overlap_anchor_indices,
+                                        np.arange(len(gt_bboxes), dtype=np.int32)]
+
+    # Find anchors have max overlap region
+    max_overlap_indices = np.where(overlaps == max_overlaps_for_each_gt)[0]
 
     # Set negative labels
-    labels[max_overlaps_gt < frc.RPN_IOU_NEGATIVE_THRESHOLD] = 0
+    labels[max_overlaps_for_each_anchor < frc.RPN_IOU_NEGATIVE_THRESHOLD] = 0
 
     # Set positive labels
-    labels[max_overlaps_gt >= frc.RPN_IOU_POSITIVE_THRESHOLD] = 1
+    labels[max_overlap_indices] = 1
+    labels[max_overlaps_for_each_anchor >= frc.RPN_IOU_POSITIVE_THRESHOLD] = 1
 
+    # Set foreground and background limitation
     labels = foreground_background_limit(labels)
 
-    bbox_targets = encode_bboxes(anchors, gt_bboxes[max_overlap_gt_indexes, :])
+    bbox_targets = encode_bboxes(anchors, gt_bboxes[max_overlap_gt_indices, :])
 
-    labels = _unmap(labels, all_anchors.shape[0], inside_boarder_indexes, fill=-1)
-    bbox_targets = _unmap(bbox_targets, all_anchors.shape[0], inside_boarder_indexes)
+    labels = _unmap(labels, all_anchors.shape[0], inside_boarder_indices, fill=-1)
+    bbox_targets = _unmap(bbox_targets, all_anchors.shape[0], inside_boarder_indices)
 
     bbox_targets = bbox_targets.reshape([-1, 4])
     labels = labels.reshape([-1, 1])

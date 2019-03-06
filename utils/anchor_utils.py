@@ -95,14 +95,20 @@ def decode_bboxes(encoded_pred_bboxes, gt_bboxes, scale_factor=None):
         t_w = t_w / scale_factor[2]
         t_h = t_h / scale_factor[3]
 
-    gt_x_centers, gt_y_centers, gt_widths, gt_heigths = bboxes2anchors(gt_bboxes)
+    xx1, yy1, xx2, yy2 = tf.unstack(gt_bboxes, axis=1)
+    gt_widths = xx2 - xx1 + 1
+    gt_heigths = yy2 - yy1 + 1
+    gt_x_centers = (xx2 + xx1) / 2
+    gt_y_centers = (yy2 + yy1) / 2
 
     pred_x_centers = t_x * gt_x_centers + gt_x_centers
     pred_y_centers = t_y * gt_y_centers + gt_y_centers
     pred_widths = tf.exp(t_w) * gt_widths
     pred_heights = tf.exp(t_h) * gt_heigths
 
-    pred_xx1, pred_yy1, pred_xx2, pred_yy2 = anchors2bboxes(tf.stack(
-        [pred_x_centers, pred_y_centers, pred_widths, pred_heights], axis=1))
+    pred_xx1 = pred_x_centers - pred_widths / 2.0 + 0.5
+    pred_yy1 = pred_x_centers + pred_widths / 2.0 - 0.5
+    pred_xx2 = pred_y_centers - pred_heights / 2.0 + 0.5
+    pred_yy2 = pred_y_centers + pred_heights / 2.0 + 0.5
 
     return tf.stack([pred_xx1, pred_yy1, pred_xx2, pred_yy2], axis=1)

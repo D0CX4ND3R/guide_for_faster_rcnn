@@ -1,10 +1,8 @@
 import os
 import time
-from typing import Any, Union
 
 import numpy as np
 import tensorflow as tf
-from tensorflow import Tensor
 from tensorflow.contrib import slim
 
 from toy_dataset.shape_generator import generate_shape_image
@@ -12,6 +10,7 @@ import resnext50
 from region_proposal_network import rpn
 from faster_rcnn import faster_rcnn, process_faster_rcnn, build_faster_rcnn_losses
 
+from utils.image_draw import draw_rectangle_with_name
 import faster_rcnn_configs as frc
 
 
@@ -69,6 +68,14 @@ def _main():
 
     final_bbox, final_score, final_categories, loss_dict, acc_dict = _network(tf_images, tf_shape, tf_labels)
 
+    display_indices = tf.reshape(tf.where(tf.greater_equal(final_score, 0.7)), [-1])
+    display_bboxes = tf.gather(final_bbox, display_indices)
+    display_categories = tf.gather(final_categories, display_indices)
+
+    cls_names = ['BG', 'circle', 'rectangle', 'triangle']
+    display_image = tf.py_func(draw_rectangle_with_name, [tf_images[0], display_bboxes, display_categories, cls_names],
+                               [tf.uint8])
+
     total_loss = frc.RPN_CLASSIFICATION_LOSS_WEIGHTS * loss_dict['rpn_cls_loss'] + \
                  frc.RPN_LOCATION_LOSS_WEIGHTS * loss_dict['rpn_bbox_loss'] + \
                  frc.FASTER_RCNN_CLASSIFICATION_LOSS_WEIGHTS * loss_dict['rcnn_cls_loss'] + \
@@ -88,15 +95,22 @@ def _main():
         tf.summary.scalar('loss/rcnn_bbox_loss', loss_dict['rcnn_bbox_loss'])
         tf.summary.scalar('accuracy/rpn_acc',  acc_dict['rpn_cls_acc'])
         tf.summary.scalar('accuracy/rcnn_acc', acc_dict['rcnn_cls_acc'])
+        tf.summary.image('final', display_image)
 
     summary_op = tf.summary.merge_all()
     init_op = tf.group(tf.global_variables_initializer(), tf.local_variables_initializer())
 
-    saver = tf.train.Saver(max_to_keep=frc.REFRESH_LOGS_ITERS)
+    saver = tf.train.Saver()
 
     with tf.Session() as sess:
         sess.run(init_op)
-        summary_writer = tf.summary.FileWriter(frc.SUMMARY_PATH, graph=sess.graph)
+        start_time = time.strftime('%Y_%m_%d_%H_%M_%S')
+        log_dir = os.path.join(frc.SUMMARY_PATH, start_time)
+        save_model_dir = os.path.join(log_dir, 'model')
+        if not os.path.exists(save_model_dir):
+            os.mkdir(log_dir)
+            os.mkdir(save_model_dir)
+        summary_writer = tf.summary.FileWriter(log_dir, graph=sess.graph)
 
         for step in range(frc.MAXIMUM_ITERS):
             images, gt_bboxes = _image_batch(frc.IMAGE_SHAPE)
@@ -105,25 +119,31 @@ def _main():
             if step % frc.REFRESH_LOGS_ITERS != 0:
                 _, global_step_ = sess.run([train_op, global_step], feed_dict)
             else:
+                step_time = time.time()
+
                 _, total_loss_, rpn_cls_loss_, rpn_bbox_loss_, rcnn_cls_loss_, rcnn_bbox_loss_, \
                 rpn_cls_acc_, rcnn_cls_acc_, summary_str, global_step_ = \
                     sess.run([train_op, total_loss, loss_dict['rpn_cls_loss'], loss_dict['rpn_bbox_loss'],
                               loss_dict['rcnn_cls_loss'], loss_dict['rcnn_bbox_loss'],
                               acc_dict['rpn_cls_acc'], acc_dict['rcnn_cls_acc'], summary_op, global_step], feed_dict)
 
-                print(f'Iter {step}: ',
-                      f'total_loss: {total_loss_:.3}',
-                      f'rpn_cls_loss: {rpn_cls_loss_:.3}',
-                      f'rpn_bbox_loss: {rpn_bbox_loss_:.3}',
-                      f'rcnn_cls_loss: {rcnn_cls_loss_:.3}',
-                      f'rcnn_bbox_loss: {rcnn_bbox_loss_:.3}',
-                      f'rpn_cls_acc: {rpn_cls_acc_:.3}',
-                      f'rcnn_cls_acc: {rcnn_cls_acc_:.3}')
+                step_time = time.time() - step_time
+
+                print(f'Iter: {step}',
+                      f'| total_loss: {total_loss_:.3}',
+                      f'| rpn_cls_loss: {rpn_cls_loss_:.3}',
+                      f'| rpn_bbox_loss: {rpn_bbox_loss_:.3}',
+                      f'| rcnn_cls_loss: {rcnn_cls_loss_:.3}',
+                      f'| rcnn_bbox_loss: {rcnn_bbox_loss_:.3}',
+                      f'| rpn_cls_acc: {rpn_cls_acc_:.3}',
+                      f'| rcnn_cls_acc: {rcnn_cls_acc_:.3}',
+                      f'| time: {step_time:.3}s')
 
                 summary_writer.add_summary(summary_str, step)
                 summary_writer.flush()
 
-                saver.save(sess, frc.MODEL_SAVE_PATH)
+                saver.save(sess, os.path.join(save_model_dir, frc.MODEL_NAME), step)
+    summary_writer.close()
 
 
 if __name__ == '__main__':
