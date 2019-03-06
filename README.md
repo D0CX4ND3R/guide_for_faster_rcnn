@@ -8,10 +8,13 @@ opencv >= 3.4.0
 
 # Usage
 ## Training
+`
 python train.py
-
+`
 ## Use Tensorboard
+`
 tensorboard --logdir=./logs
+`
 
 # Others
 The backbone is ResNeXt-50, now only support batch_size=1.
