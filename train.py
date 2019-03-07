@@ -10,7 +10,7 @@ import resnext50
 from region_proposal_network import rpn
 from faster_rcnn import faster_rcnn, process_faster_rcnn, build_faster_rcnn_losses
 
-from utils.image_draw import draw_rectangle_with_name, draw_rectangle, draw_rectangle2
+from utils.image_draw import draw_rectangle_with_name, draw_rectangle
 import faster_rcnn_configs as frc
 
 
@@ -27,18 +27,13 @@ def _network(inputs, image_shape, gt_bboxes):
     rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss, rois, labels, bbox_targets = rpn(features, image_shape, gt_bboxes)
 
     # TODO: Add summary
-    display_rois_img = tf.reshape(inputs,
-                                  shape=[frc.IMAGE_SHAPE[0], frc.IMAGE_SHAPE[1], 3])
-    display_positive_indices = tf.reshape(tf.where(tf.equal(labels, 1)), [-1])
-    display_negative_indices = tf.reshape(tf.where(tf.equal(labels, 0)), [-1])
-    display_positive_rois = tf.gather(rois, display_positive_indices)
-    display_negative_rois = tf.gather(rois, display_negative_indices)
-    display_positive_img = tf.py_func(draw_rectangle, [display_rois_img, display_positive_rois],
-                                      [tf.uint8])
-    display_negative_img = tf.py_func(draw_rectangle2, [display_rois_img, display_negative_rois],
-                                      [tf.uint8])
-    tf.summary.image('rpn_positive_rois', display_positive_img)
-    tf.summary.image('rpn_negative_rois', display_negative_img)
+    class_names = ['BG', 'circle', 'rectangle', 'triangle']
+    display_rois_img = tf.reshape(inputs, shape=[frc.IMAGE_SHAPE[0], frc.IMAGE_SHAPE[1], 3])
+    for i in range(frc.NUM_CLS + 1):
+        display_indices = tf.reshape(tf.where(tf.equal(labels, i)), [-1])
+        display_rois = tf.gather(rois, display_indices)
+        display_img = tf.py_func(draw_rectangle, [display_rois_img, display_rois], [tf.uint8])
+        tf.summary.image('class_{}_rois'.format(class_names[i]), display_img)
 
     # RCNN
     cls_score, bbox_pred = faster_rcnn(features, rois, image_shape)
@@ -82,7 +77,8 @@ def _main():
 
     final_bbox, final_score, final_categories, loss_dict, acc_dict = _network(tf_images, tf_shape, tf_labels)
 
-    display_indices = tf.reshape(tf.where(tf.greater_equal(final_score, 0.7)), [-1])
+    display_indices = tf.reshape(tf.where(tf.greater_equal(final_score, 0.7) &
+                                          tf.not_equal(final_categories, 0)), [-1])
     display_bboxes = tf.gather(final_bbox, display_indices)
     display_categories = tf.gather(final_categories, display_indices)
 

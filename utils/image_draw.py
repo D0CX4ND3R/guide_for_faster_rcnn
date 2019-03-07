@@ -11,7 +11,7 @@ def draw_rectangle_with_name(image, bboxes, categories, cls_names):
         pt1 = (int(box[0]), int(box[1]))
         pt2 = (int(box[2]), int(box[3]))
 
-        image = cv2.rectangle(image, pt1, pt2, (0, 255, 0), 1)
+        image = cv2.rectangle(image, pt1, pt2, (0, 255, 0), 2)
         # image = putText(image, cls, (pt1[0], pt1[1]), 0, 1, (0, 255, 0), 1)
 
     return image
@@ -25,22 +25,22 @@ def draw_rectangle(image, bboxes):
         pt1 = (int(box[0]), int(box[1]))
         pt2 = (int(box[2]), int(box[3]))
 
-        image = cv2.rectangle(image, pt1, pt2, (0, 255, 0), 1)
+        image = cv2.rectangle(image, pt1, pt2, (255, 0, 0), 2)
 
     return image
 
 
-def draw_rectangle2(image, bboxes):
-    image = np.uint8(image)
-    n = len(bboxes)
-    for i in range(n):
-        box = bboxes[i]
-        pt1 = (int(box[0]), int(box[1]))
-        pt2 = (int(box[2]), int(box[3]))
+# def draw_rectangle2(image, bboxes):
+#     image = np.uint8(image)
+#     n = len(bboxes)
+#     for i in range(n):
+#         box = bboxes[i]
+#         pt1 = (int(box[0]), int(box[1]))
+#         pt2 = (int(box[2]), int(box[3]))
+#
+#         image = cv2.rectangle(image, pt1, pt2, (255, 0, 0), 1)
 
-        image = cv2.rectangle(image, pt1, pt2, (0, 0, 255), 1)
-
-    return image
+    # return image
 
 
 if __name__ == '__main__':

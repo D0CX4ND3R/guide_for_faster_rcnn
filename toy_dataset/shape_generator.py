@@ -2,7 +2,7 @@ import numpy as np
 import cv2
 
 
-def generate_shape_image(image_size, n=5):
+def generate_shape_image(image_size, n=4):
     img_h, img_w = image_size
     image = np.random.randint(0, 255, (img_h, img_w, 3), dtype=np.uint8)
     # image = np.zeros((img_h, img_w, 3), dtype=np.uint8)
@@ -32,9 +32,9 @@ def generate_shape_image(image_size, n=5):
     for i in range(len(labels)):
         data = draw_data[i]
         color = _random_color()
-        if labels[i] == 0:
+        if labels[i] == 1:
             image = cv2.circle(image, (data[0][0], data[0][1]), data[1], color, -1)
-        elif labels[i] == 1:
+        elif labels[i] == 2:
             # print(data[0], data[1])
             image = cv2.rectangle(image, (data[0][0], data[0][1]), (data[1][0], data[1][1]), color, -1)
         else:
@@ -53,38 +53,39 @@ def _gen_centers(n, image_size, board_rate=0.2):
 
     center_pos = np.hstack([np.random.randint(board_w, img_w - board_w, (n, 1)),
                             np.random.randint(board_h, img_h - board_h, (n, 1))])
-    radius = np.int32(np.round(np.minimum(img_h, img_w) / np.random.randint(3, 8, n)))
+    radius = np.int32(np.round(np.minimum(img_h, img_w) / np.random.randint(4, 8, n)))
 
     return center_pos, np.sort(radius)[::-1]
 
 
-def _gen_shape(image_shape, center_pos, radius, shape_type=None):
+def _gen_shape(image_shape, center_pos, radius, shape_type=None, offset=4):
     if shape_type is None:
-        shape_type = np.random.randint(0, 3)
+        shape_type = np.random.randint(1, 4)
 
     img_h, img_w = image_shape
 
-    if shape_type == 0:
-        rect = [np.maximum(0, int(center_pos[0] - radius)),
-                np.maximum(0, int(center_pos[1] - radius)),
-                np.minimum(img_w, int(center_pos[0] + radius)),
-                np.minimum(img_h, int(center_pos[1] + radius))]
+    if shape_type == 1:
+        rect = [np.maximum(0, int(center_pos[0] - radius - offset)),
+                np.maximum(0, int(center_pos[1] - radius - offset)),
+                np.minimum(img_w, int(center_pos[0] + radius + offset)),
+                np.minimum(img_h, int(center_pos[1] + radius + offset))]
         area = np.pi * radius ** 2
         data = [center_pos, radius]
-    elif shape_type == 1:
+    elif shape_type == 2:
         w = radius
         h = (np.random.rand() + 0.5) * w
         pt1 = (int(np.maximum(0, center_pos[0] - w // 2)),
                int(np.minimum(img_w, center_pos[1] - h // 2)))
         pt2 = (int(np.maximum(0, center_pos[0] + w // 2)),
                int(np.minimum(img_h, center_pos[1] + h // 2)))
-        rect = [pt1[0], pt1[1], pt2[0], pt2[1]]
+        rect = [np.maximum(0, pt1[0] - offset), np.maximum(0, pt1[1] - offset),
+                np.minimum(img_w, pt2[0] + offset), np.minimum(img_h, pt2[1] + offset)]
         area = _calc_box_area(rect)
         data = [pt1, pt2]
     else:
         data, rect, area = _gen_triangle(center_pos, radius)
-        rect[:2] = np.maximum(0, rect[:2])
-        rect[2:] = np.minimum([img_w, img_h], rect[2:])
+        rect[:2] = np.maximum(0, rect[:2] - offset)
+        rect[2:] = np.minimum([img_w, img_h], rect[2:] + offset)
 
     return rect, area, shape_type, data
 
@@ -131,8 +132,8 @@ def _gen_triangle(center_pos, radius):
 
 
 if __name__ == '__main__':
-    cls_names = ['circle', 'rectangle', 'triangle']
-    im, bboxes, labels, areas = generate_shape_image((896, 896))
+    cls_names = ['BG', 'circle', 'rectangle', 'triangle']
+    im, bboxes, labels, areas = generate_shape_image((224, 224))
 
     num_target = len(labels)
 

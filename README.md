@@ -21,9 +21,11 @@ The backbone is ResNeXt-50, now only support batch_size=1.
 
 # Need to fix
 * ~~Nan will appeares during training the RPN.~~
-* Maybe has problems in RPN generating rois and labels.
+* ~~Maybe has problems in RPN generating rois and labels.~~
 * For the toy dataset, maybe the resnext-50 is too large to train.
-* When training, rcnn_bbox_loss reduces to zero quickly, accuracy increses to 1.0 quickly.
+* ~~When training, rcnn_bbox_loss reduces to zero quickly, accuracy increses to 1.0 quickly.~~
+* The unbalance of positive and negative rois causes a bad performance in bbox regression. Maybe finetune minibatch 
+configs could solving the problem.
 
 # Next
 * Add references.

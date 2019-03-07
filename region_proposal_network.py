@@ -68,8 +68,10 @@ def process_proposal_targets(rpn_rois, gt_bboxes):
     """
     # rpn rois: [x1, y1, x2, y2]
     # ground truth: [x1, y1, x2, y2, label]
+
     if frc.ADD_GT_BOX_TO_TRAIN:
-        all_rois = np.concatenate([rpn_rois, gt_bboxes[:, :-1]], axis=0)
+        # Add ground truth bboxes to train.
+        all_rois = np.vstack([rpn_rois, gt_bboxes[:, :-1]])
     else:
         all_rois = rpn_rois
 
@@ -78,12 +80,11 @@ def process_proposal_targets(rpn_rois, gt_bboxes):
     fg_rois_per_image = np.round(frc.FASTER_RCNN_POSITIVE_RATE * rois_per_image)
 
     # Sample rois with classification labels and bounding box regression.
-    # TODO: Add class count in config.
     # ALGORTHM:
     # 1. Calculates overlaps between rois and ground truth.
     # 2. Get the maximum overlap area for each roi and set it label equal to the ground truth.
 
-    overlaps = get_overlaps_py(rpn_rois, gt_bboxes[:, :-1])
+    overlaps = get_overlaps_py(all_rois, gt_bboxes[:, :-1])
     max_overlaps_gt_indexes = np.argmax(overlaps, axis=1)
     max_overlaps = np.max(overlaps, axis=1)
 
@@ -115,7 +116,7 @@ def process_proposal_targets(rpn_rois, gt_bboxes):
 
     # 5. Make the negative labels equal to 0.
     labels[int(fg_rois_per_image):] = 0
-    rois = all_rois[keep_indices]
+    rois = np.float32(all_rois[keep_indices])
 
     # 6. Encodes bounding boxes to targets coordinates for bounding box regression.
     bbox_targets_data = encode_bboxes(rois, gt_bboxes[max_overlaps_gt_indexes[keep_indices], :-1])
@@ -365,8 +366,17 @@ def build_rpn_losses(rpn_cls_score, rpn_cls_prob, rpn_bbox_pred, rpn_bbox_target
     return rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss
 
 
-# if __name__ == '__main__':
-#     image_shape = [224, 224]
-#     anchors = generate_anchors()
-#     gt_bbox =
-#     generate_rpn_labels(anchors,)
+if __name__ == '__main__':
+    gt_bboxes = np.random.randint(0, 256, (10, 4))
+    labels = np.random.randint(0, 3, 10)
+    gt_bboxes = np.sort(gt_bboxes, axis=1)
+    gt_bboxes = np.concatenate([gt_bboxes, labels[:, np.newaxis]], axis=1)
+    pred_bboxes = np.random.randint(0, 256, (15, 4))
+    pred_bboxes = np.sort(pred_bboxes, axis=1)
+
+    rois, labels2, bboxe_targets = process_proposal_targets(pred_bboxes, gt_bboxes)
+    print(gt_bboxes)
+    print(pred_bboxes)
+    print(rois)
+    print(labels)
+    print(labels2)
