@@ -32,7 +32,7 @@ configs could solving the problem.
 # Next
 * Add references.
 * Add commits.
-* Add different backbones: ~~VGG~~, MobilNet.
+* Add different backbones: ~~VGG~~, MobileNet.
 * Add test codes. (Complete after validate the toy dataset.)
 * ~~Fix Nan in training the RPN.~~
 * Training with other datasets as COCO or VOC. (Complete after validate the toy dataset.)
