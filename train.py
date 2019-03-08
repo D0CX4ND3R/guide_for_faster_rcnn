@@ -18,7 +18,7 @@ import faster_rcnn_configs as frc
 def _network(inputs, image_shape, gt_bboxes):
     if 'backbones' not in sys.path:
         sys.path.append('backbones')
-    cnn = import_module(frc.BACKBONE, package='backbones.')
+    cnn = import_module(frc.BACKBONE, package='backbones')
     # CNN
     feature_map = cnn.inference(inputs)
 
@@ -37,7 +37,7 @@ def _network(inputs, image_shape, gt_bboxes):
         display_indices = tf.reshape(tf.where(tf.equal(labels, i)), [-1])
         display_rois = tf.gather(rois, display_indices)
         display_img = tf.py_func(draw_rectangle, [display_rois_img, display_rois], [tf.uint8])
-        tf.summary.image('class_{}_rois'.format(class_names[i]), display_img)
+        tf.summary.image('class_rois/{}'.format(class_names[i]), display_img)
 
     # RCNN
     cls_score, bbox_pred = faster_rcnn(features, rois, image_shape)
@@ -87,35 +87,63 @@ def _main():
 
     final_bbox, final_score, final_categories, loss_dict, acc_dict = _network(preprocessed_inputs, tf_shape, tf_labels)
 
-    display_indices = tf.reshape(tf.where(tf.greater_equal(final_score, frc.TEST_SCORE_THRESHOLD) &
-                                          tf.not_equal(final_categories, 0)), [-1])
-    display_bboxes = tf.gather(final_bbox, display_indices)
-    display_categories = tf.gather(final_categories, display_indices)
+    display_indices_25 = tf.reshape(tf.where(tf.greater_equal(final_score, 0.25) &
+                                             tf.less(final_score, 0.5) &
+                                             tf.not_equal(final_categories, 0)), [-1])
+    display_indices_50 = tf.reshape(tf.where(tf.greater_equal(final_score, 0.5) &
+                                             tf.less(final_score, 0.75) &
+                                             tf.not_equal(final_categories, 0)), [-1])
+    display_indices_75 = tf.reshape(tf.where(tf.greater_equal(final_score, 0.75) &
+                                             tf.not_equal(final_categories, 0)), [-1])
+    display_bboxes_25 = tf.gather(final_bbox, display_indices_25)
+    display_bboxes_50 = tf.gather(final_bbox, display_indices_50)
+    display_bboxes_75 = tf.gather(final_bbox, display_indices_75)
+    display_categories_25 = tf.gather(final_categories, display_indices_25)
+    display_categories_50 = tf.gather(final_categories, display_indices_50)
+    display_categories_75 = tf.gather(final_categories, display_indices_75)
 
-    cls_names = ['BG', 'circle', 'rectangle', 'triangle']
-    display_image = tf.py_func(draw_rectangle_with_name, [tf_images[0], display_bboxes, display_categories, cls_names],
-                               [tf.uint8])
+    cls_names = [u'BG', u'circle', u'rectangle', u'triangle']
+    display_image_25 = tf.py_func(draw_rectangle_with_name,
+                                  [tf_images[0], display_bboxes_25, display_categories_25, cls_names],
+                                  [tf.uint8])
+    display_image_50 = tf.py_func(draw_rectangle_with_name,
+                                  [tf_images[0], display_bboxes_50, display_categories_50, cls_names],
+                                  [tf.uint8])
+    display_image_75 = tf.py_func(draw_rectangle_with_name,
+                                  [tf_images[0], display_bboxes_75, display_categories_75, cls_names],
+                                  [tf.uint8])
+    display_image_gt = tf.py_func(draw_rectangle_with_name,
+                                  [tf_images[0], tf_labels[:, :-1], tf_labels[:, -1], cls_names],
+                                  [tf.uint8])
 
     total_loss = frc.RPN_CLASSIFICATION_LOSS_WEIGHTS * loss_dict['rpn_cls_loss'] + \
                  frc.RPN_LOCATION_LOSS_WEIGHTS * loss_dict['rpn_bbox_loss'] + \
                  frc.FASTER_RCNN_CLASSIFICATION_LOSS_WEIGHTS * loss_dict['rcnn_cls_loss'] + \
                  frc.FASTER_RCNN_LOCATION_LOSS_WEIGHTS * loss_dict['rcnn_bbox_loss'] + \
-                 0.0005 * tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
+                 tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
 
     global_step = slim.get_or_create_global_step()
 
-    learning_rate = tf.train.exponential_decay(learning_rate=0.003, global_step=0, decay_steps=10, decay_rate=0.5)
-    train_op = tf.train.AdamOptimizer(learning_rate).minimize(total_loss)
+    learning_rate = tf.train.exponential_decay(learning_rate=0.05, global_step=0, decay_steps=10, decay_rate=0.5)
+    # train_op = tf.train.AdamOptimizer(learning_rate).minimize(total_loss)
+    optimizer = tf.train.AdamOptimizer(learning_rate)
+    gradients = optimizer.compute_gradients(total_loss)
+    train_op = optimizer.apply_gradients(gradients, global_step=global_step)
 
-    with tf.name_scope('summary'):
-        tf.summary.scalar('loss/total_loss', total_loss)
-        tf.summary.scalar('loss/rpn_cls_loss', loss_dict['rpn_cls_loss'])
-        tf.summary.scalar('loss/rpn_bbox_loss', loss_dict['rpn_bbox_loss'])
-        tf.summary.scalar('loss/rcnn_cls_loss', loss_dict['rcnn_cls_loss'])
-        tf.summary.scalar('loss/rcnn_bbox_loss', loss_dict['rcnn_bbox_loss'])
-        tf.summary.scalar('accuracy/rpn_acc',  acc_dict['rpn_cls_acc'])
-        tf.summary.scalar('accuracy/rcnn_acc', acc_dict['rcnn_cls_acc'])
-        tf.summary.image('final', display_image)
+    with tf.name_scope('loss'):
+        tf.summary.scalar('total_loss', total_loss)
+        tf.summary.scalar('rpn_cls_loss', loss_dict['rpn_cls_loss'])
+        tf.summary.scalar('rpn_bbox_loss', loss_dict['rpn_bbox_loss'])
+        tf.summary.scalar('rcnn_cls_loss', loss_dict['rcnn_cls_loss'])
+        tf.summary.scalar('rcnn_bbox_loss', loss_dict['rcnn_bbox_loss'])
+    with tf.name_scope('accuracy'):
+        tf.summary.scalar('rpn_acc',  acc_dict['rpn_cls_acc'])
+        tf.summary.scalar('rcnn_acc', acc_dict['rcnn_cls_acc'])
+
+    tf.summary.image('detection/gt', display_image_gt)
+    tf.summary.image('detection/25', display_image_25)
+    tf.summary.image('detection/50', display_image_50)
+    tf.summary.image('detection/75', display_image_75)
 
     summary_op = tf.summary.merge_all()
     init_op = tf.group(tf.global_variables_initializer(), tf.local_variables_initializer())

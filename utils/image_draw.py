@@ -4,15 +4,20 @@ import cv2
 
 def draw_rectangle_with_name(image, bboxes, categories, cls_names):
     image = np.uint8(image)
+    img_h = image.shape[1]
     n = len(bboxes)
+    colors = [(255, 0, 255), (0, 255, 0), (255, 255, 255)]
     for i in range(n):
         box = bboxes[i]
-        cls = cls_names[int(categories[i])]
+        categ = int(categories[i])
+        cls = str(cls_names[categ])
         pt1 = (int(box[0]), int(box[1]))
         pt2 = (int(box[2]), int(box[3]))
+        pt = (int(np.maximum(0, box[0])),
+              int(np.minimum(img_h, box[3])))
 
-        image = cv2.rectangle(image, pt1, pt2, (0, 255, 0), 2)
-        # image = putText(image, cls, (pt1[0], pt1[1]), 0, 1, (0, 255, 0), 1)
+        image = cv2.rectangle(image, pt1, pt2, colors[categ-1], 3)
+        image = cv2.putText(image, cls, pt, cv2.FONT_HERSHEY_COMPLEX, 1.0, colors[categ-1], 2)
 
     return image
 
@@ -46,7 +51,7 @@ def draw_rectangle(image, bboxes):
 if __name__ == '__main__':
     img = np.zeros((448, 448, 3), dtype=np.float32)
 
-    cls_names = ['BG', 'circle', 'rectangle', 'triangle']
+    cls_names = [u'BG', u'circle', u'rectangle', u'triangle']
     cate = [1, 2, 3]
     bboxes = np.array([[224.5 - 64.5, 224.5 - 64.5, 224.5 + 64.5, 224.5 + 64.5],
                        [224.5 - 128.5, 224.5 - 32.5, 224.5 + 128.5, 224.5 + 32.5],

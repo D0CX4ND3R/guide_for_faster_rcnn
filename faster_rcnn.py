@@ -17,7 +17,7 @@ def faster_rcnn(features, rois, image_shape, is_training=True):
 
         if 'backbones' not in sys.path:
             sys.path.append('backbones')
-        cnn = import_module(frc.BACKBONE, package='backbones.')
+        cnn = import_module(frc.BACKBONE, package='backbones')
         # Fully connected
         net_flatten = cnn.head(roi_features)
 

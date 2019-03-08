@@ -1,8 +1,9 @@
 import numpy as np
 import cv2
+import time
 
 
-def generate_shape_image(image_size, n=6):
+def generate_shape_image(image_size, n=4):
     img_h, img_w = image_size
     image = np.random.randint(0, 255, (img_h, img_w, 3), dtype=np.uint8)
     # image = np.zeros((img_h, img_w, 3), dtype=np.uint8)
@@ -47,18 +48,31 @@ def _calc_box_area(box):
 
 
 def _gen_centers(n, image_size, board_rate=0.2):
+    # np.random.seed(round(time.time()) % 13)
     img_h, img_w = image_size
     board_w = np.round(board_rate * img_w)
     board_h = np.round(board_rate * img_h)
 
-    center_pos = np.hstack([np.random.randint(board_w, img_w - board_w, (n, 1)),
-                            np.random.randint(board_h, img_h - board_h, (n, 1))])
-    radius = np.int32(np.round(np.minimum(img_h, img_w) / np.random.randint(4, 8, n)))
+    unit1 = np.round(np.sqrt(n))
+    unit2 = np.round(n / unit1)
+    xx, yy = np.meshgrid(np.arange(unit1), np.arange(unit2))
+    x_step = img_w // unit1
+    y_step = img_h // unit2
+    radius = np.int32(np.round(np.minimum(x_step, y_step) / np.random.randint(2, 6, n)))
+    center_pos = []
+    for i in range(xx.shape[0]):
+        for j in range(xx.shape[1]):
+            pt = [np.random.randint(x_step * xx[i, j] + board_w, x_step * (xx[i, j] + 1) - board_w),
+                  np.random.randint(y_step * yy[i, j] + board_h, y_step * (yy[i, j] + 1) - board_h)]
+            center_pos.append(pt)
+    # print(center_pos)
+    center_pos = np.array(center_pos)
+    # print(center_pos)
 
     return center_pos, np.sort(radius)[::-1]
 
 
-def _gen_shape(image_shape, center_pos, radius, shape_type=None, offset=4):
+def _gen_shape(image_shape, center_pos, radius, shape_type=None, offset=15):
     if shape_type is None:
         shape_type = np.random.randint(1, 4)
 
@@ -97,7 +111,7 @@ def _random_color(colors=None):
         color = np.zeros(3)
         color[delta < 0] = 255
     else:
-        color = np.random.randint(0, 255, (3,))
+        color = np.random.randint(50, 255, (3,))
 
     return int(color[0]), int(color[1]), int(color[2])
 
@@ -133,18 +147,20 @@ def _gen_triangle(center_pos, radius):
 
 if __name__ == '__main__':
     cls_names = ['BG', 'circle', 'rectangle', 'triangle']
-    im, bboxes, labels, areas = generate_shape_image((224, 224))
 
-    num_target = len(labels)
 
-    for i in range(num_target):
-        box = bboxes[i]
-        l = labels[i]
-        info = '{}: {} \t{:.3}'.format(i, cls_names[l], areas[i])
-        print(info)
-        im = cv2.rectangle(im, (box[0], box[1]), (box[2], box[3]), (0, 0, 0), 2)
-        im = cv2.putText(im, cls_names[l] + str(areas[i]), (box[0] + 5, box[1] + 15), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,0), 1)
-        # cv2.imshow(info, im.copy())
-    cv2.imshow('image', im)
-    cv2.waitKey()
+    while cv2.waitKey(1500) & 0xFF != ord('q'):
+        im, bboxes, labels, areas = generate_shape_image((448, 448))
+
+        num_target = len(labels)
+        for i in range(num_target):
+            box = bboxes[i]
+            l = labels[i]
+            info = '{}: {} \t{:.3}'.format(i, cls_names[l], float(areas[i]))
+            print(info)
+            im = cv2.rectangle(im, (box[0], box[1]), (box[2], box[3]), (255, 255, 255), 2)
+            im = cv2.putText(im, cls_names[l] + str(areas[i]), (box[0] + 5, box[1] + 15), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 1)
+            # cv2.imshow(info, im.copy())
+        cv2.imshow('image', im)
+    # cv2.waitKey()
     cv2.destroyAllWindows()

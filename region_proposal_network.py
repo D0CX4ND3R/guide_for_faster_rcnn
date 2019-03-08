@@ -105,7 +105,8 @@ def process_proposal_targets(rpn_rois, gt_bboxes):
     # chose background indices
     bg_indices = np.where((max_overlaps < frc.FASTER_RCNN_IOU_POSITIVE_THRESHOLD) &
                           (max_overlaps >= frc.FASTER_RCNN_IOU_NEGATIVE_THRESHOLD))[0]
-    bg_roi_per_image = rois_per_image - fg_rois_per_image
+    # bg_roi_per_image = rois_per_image - fg_rois_per_image
+    bg_roi_per_image = fg_rois_per_image
     bg_roi_per_image = np.minimum(bg_roi_per_image, bg_indices.size)
 
     if bg_indices.size > 0:

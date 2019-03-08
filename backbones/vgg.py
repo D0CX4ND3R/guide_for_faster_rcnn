@@ -8,7 +8,7 @@ _l2_weight = 0.0005
 # STRIDE_SIZE = 16
 
 
-def inference(inputs, is_training=True, num_layers=11, name='vgg'):
+def inference(inputs, is_training=True, num_layers=16, name='vgg'):
     assert type(num_layers) == int
     assert num_layers in [11, 13, 16, 19]
 
@@ -52,7 +52,7 @@ def inference(inputs, is_training=True, num_layers=11, name='vgg'):
     return net
 
 
-def head(net, feature_dim=1000, is_training=True, num_layers=11, name='vgg'):
+def head(net, feature_dim=1024, is_training=True, num_layers=16, name='vgg'):
     assert type(num_layers) == int
     assert num_layers in [11, 13, 16, 19]
 
@@ -71,10 +71,12 @@ def head(net, feature_dim=1000, is_training=True, num_layers=11, name='vgg'):
                     net = slim.repeat(net, 4, slim.conv2d, num_outputs=512, kernel_size=[3, 3], scope=name + '_conv5')
                 net = slim.max_pool2d(net, [2, 2], scope=name + '_pool5')
 
-                net = slim.flatten(net, scope=name + '_flatten')
-                net = slim.fully_connected(net, 4096, scope=name + '_fc6')
-                net = slim.dropout(net, 0.8, is_training=is_training)
-                net = slim.fully_connected(net, 4096, scope=name + '_fc7')
-                net = slim.dropout(net, 0.8, is_training=is_training)
-                net = slim.fully_connected(net, feature_dim, activation_fn=None, scope=name + '_fc8')
+                # net = slim.flatten(net, scope=name + '_flatten')
+                # net = slim.fully_connected(net, 4096, scope=name + '_fc6')
+                # net = slim.dropout(net, 0.8, is_training=is_training)
+                # net = slim.fully_connected(net, 4096, scope=name + '_fc7')
+                # net = slim.dropout(net, 0.8, is_training=is_training)
+                # net = slim.fully_connected(net, feature_dim, activation_fn=None, scope=name + '_fc8')
+                net = slim.repeat(net, 2, slim.conv2d, num_outputs=feature_dim, kernel_size=[1, 1])
+        net = tf.reduce_mean(net, axis=[1, 2], name='global_average_pooling')
     return net
