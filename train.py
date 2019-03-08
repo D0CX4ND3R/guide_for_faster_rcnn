@@ -1,12 +1,13 @@
 import os
+import sys
 import time
+from importlib import import_module
 
 import numpy as np
 import tensorflow as tf
 from tensorflow.contrib import slim
 
 from toy_dataset.shape_generator import generate_shape_image
-import resnext50
 from region_proposal_network import rpn
 from faster_rcnn import faster_rcnn, process_faster_rcnn, build_faster_rcnn_losses
 
@@ -15,8 +16,11 @@ import faster_rcnn_configs as frc
 
 
 def _network(inputs, image_shape, gt_bboxes):
+    if 'backbones' not in sys.path:
+        sys.path.append('backbones')
+    cnn = import_module(frc.BACKBONE, package='backbones.')
     # CNN
-    feature_map = resnext50.inference(inputs)
+    feature_map = cnn.inference(inputs)
 
     features = slim.conv2d(feature_map, 512, [3, 3], normalizer_fn=slim.batch_norm,
                            normalizer_params={'decay': 0.995, 'epsilon': 0.0001},
@@ -66,6 +70,10 @@ def _image_batch(image_shape=None, batch_size=1):
     return batch_image, np.hstack([bboxes, labels[:, np.newaxis]])
 
 
+def _preprocess(inputs, image_shape=None):
+    return inputs
+
+
 def _main():
     tf_images = tf.placeholder(dtype=tf.float32,
                                shape=[frc.IMAGE_BATCH_SIZE, frc.IMAGE_SHAPE[0], frc.IMAGE_SHAPE[1], 3],
@@ -75,9 +83,11 @@ def _main():
 
     tf_shape = tf.placeholder(dtype=tf.int32, shape=[None], name='image_shape')
 
-    final_bbox, final_score, final_categories, loss_dict, acc_dict = _network(tf_images, tf_shape, tf_labels)
+    preprocessed_inputs = _preprocess(tf_images)
 
-    display_indices = tf.reshape(tf.where(tf.greater_equal(final_score, 0.7) &
+    final_bbox, final_score, final_categories, loss_dict, acc_dict = _network(preprocessed_inputs, tf_shape, tf_labels)
+
+    display_indices = tf.reshape(tf.where(tf.greater_equal(final_score, frc.TEST_SCORE_THRESHOLD) &
                                           tf.not_equal(final_categories, 0)), [-1])
     display_bboxes = tf.gather(final_bbox, display_indices)
     display_categories = tf.gather(final_categories, display_indices)

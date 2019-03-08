@@ -19,7 +19,7 @@ def _smooth_l1_loss(bbox_pred, bbox_targets, sigma=1.0):
     return loss_box
 
 
-def smooth_l1_loss_rpn(bbox_pred, bbox_targets, rpn_labels, sigma=1.0):
+def smooth_l1_loss_rpn(bbox_pred, bbox_targets, rpn_labels, sigma=3.0):
     value = _smooth_l1_loss(bbox_pred, bbox_targets, sigma)
     value = tf.reduce_sum(value, axis=1)
 

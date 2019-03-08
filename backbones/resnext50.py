@@ -5,18 +5,15 @@ from tensorflow.contrib import slim
 _bn_params = {'decay': 0.995, 'epsilon': 0.0001}
 _l2_weight = 0.0005
 
-STRIDE_SIZE = 16
+# STRIDE_SIZE = 16
 
 
-def _preprocess(inputs, input_size=None):
-    return inputs
-
-
-def _conv2d_block(net, filters, block_num, conv_num, cardinality=32, projection=False):
+def _conv2d_block(net, filters, block_num, conv_num, cardinality=32, projection=False, is_trining=True):
     with slim.arg_scope([slim.conv2d], padding='SAME', activation_fn=tf.nn.relu,
                         normalizer_fn=slim.batch_norm,
                         normalizer_params=_bn_params,
-                        weights_regularizer=slim.l2_regularizer(_l2_weight)):
+                        weights_regularizer=slim.l2_regularizer(_l2_weight),
+                        trainable=is_trining):
         cardinality_list = []
         for i in range(cardinality):
             if not projection:
@@ -41,10 +38,7 @@ def _conv2d_block(net, filters, block_num, conv_num, cardinality=32, projection=
         return tf.nn.relu(net + residul_net, name='conv{}_relu'.format(block_num))
 
 
-def inference(inputs, name='resnext50'):
-    # preprocess 224 x 224 x 3
-    preprocessed_inputs = _preprocess(inputs)
-
+def inference(inputs, is_training=True, name='resnext50'):
     with tf.variable_scope(name, 'resnext50'):
 
         # conv1 224 x 224 x 3 => 112 x 112 x 64
@@ -52,8 +46,9 @@ def inference(inputs, name='resnext50'):
             with slim.arg_scope([slim.conv2d], activation_fn=tf.nn.relu,
                                 normalizer_fn=slim.batch_norm,
                                 normalizer_params=_bn_params,
-                                weights_regularizer=slim.l2_regularizer(_l2_weight)):
-                net = slim.conv2d(preprocessed_inputs, 64, [7, 7], 2, padding='SAME', scope='conv1')
+                                weights_regularizer=slim.l2_regularizer(_l2_weight),
+                                trainable=is_training):
+                net = slim.conv2d(inputs, 64, [7, 7], 2, padding='SAME', scope='conv1')
                 net = slim.max_pool2d(net, 2, scope='pool1')
 
         # conv2 112 x 112 x 64 => 56 x 56 x 256
@@ -82,7 +77,7 @@ def inference(inputs, name='resnext50'):
     return net
 
 
-def resnext_head(net, feature_dim=1000):
+def head(net):
     with tf.variable_scope('resnext50', reuse=tf.AUTO_REUSE):
         # conv5 14 x 14 x 1024 => 7 x 7 x 2048
         with tf.variable_scope('resnext50_conv5'):

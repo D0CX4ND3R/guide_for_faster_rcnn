@@ -1,7 +1,9 @@
+import sys
+from importlib import import_module
+
 import tensorflow as tf
 from tensorflow.contrib import slim
 
-import resnext50
 from utils.anchor_utils import decode_bboxes
 from utils.losses import smooth_l1_loss_rcnn
 
@@ -13,8 +15,11 @@ def faster_rcnn(features, rois, image_shape, is_training=True):
         # ROI Pooling
         roi_features = roi_pooling(features, rois, image_shape)
 
+        if 'backbones' not in sys.path:
+            sys.path.append('backbones')
+        cnn = import_module(frc.BACKBONE, package='backbones.')
         # Fully connected
-        net_flatten = resnext50.resnext_head(roi_features)
+        net_flatten = cnn.head(roi_features)
 
         with slim.arg_scope([slim.fully_connected], weights_regularizer=slim.l2_regularizer(0.0005),
                             weights_initializer=slim.variance_scaling_initializer(1.0, mode='FAN_AVG', uniform=True),
@@ -31,7 +36,6 @@ def faster_rcnn(features, rois, image_shape, is_training=True):
 def process_faster_rcnn(rois, bbox_pred, scores, image_shape):
     with tf.variable_scope('postprocess_faster_rcnn'):
         rois = tf.stop_gradient(rois)
-        scale_factor = [10., 10., 5., 5.]
         bbox_pred = tf.reshape(bbox_pred, [-1, frc.NUM_CLS + 1, 4])
         bbox_pred = tf.stop_gradient(bbox_pred)
         scores = tf.stop_gradient(scores)
@@ -47,7 +51,7 @@ def process_faster_rcnn(rois, bbox_pred, scores, image_shape):
             encoded_bbox = bboxes_pred_list[i]
             score = score_list[i]
 
-            decoded_bbox = decode_bboxes(encoded_bbox, rois, scale_factor=scale_factor)
+            decoded_bbox = decode_bboxes(encoded_bbox, rois, scale_factor=None)     # frc.ROI_SCALE_FACTORS
 
             # clip bounding to image shape
             predict_x_min, predict_y_min, predict_x_max, predict_y_max = tf.unstack(decoded_bbox, axis=1)

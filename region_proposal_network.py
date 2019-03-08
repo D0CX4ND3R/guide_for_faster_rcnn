@@ -192,7 +192,8 @@ def process_rpn_proposals(anchors, rpn_cls_pred, rpn_bbox_pred, image_shape, sca
 
 
 def make_anchors_in_image(anchor_base, feature_width, feature_height, feature_stride):
-    _anchors = generate_anchors(original_anchor=[1, 1, anchor_base - 1, anchor_base - 1])
+    _anchors = generate_anchors(original_anchor=[1, 1, anchor_base - 1, anchor_base - 1],
+                                scales=frc.ANCHOR_SCALE, ratios=frc.ANCHOR_RATE)
     shift_x = tf.range(feature_width, dtype=tf.float32) * feature_stride
     shift_y = tf.range(feature_height, dtype=tf.float32) * feature_stride
     shift_x, shift_y = tf.meshgrid(shift_x, shift_y)

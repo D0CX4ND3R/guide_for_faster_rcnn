@@ -17,12 +17,14 @@ tensorboard --logdir=./logs
 `
 
 # Others
-The backbone is ResNeXt-50, now only support batch_size=1.
+~~The backbone is ResNeXt-50, now only support batch_size=1.~~
+
+Two backbones can be chosen for training the toy dataset, ResNeXt-50 and VGG(default VGG-13).
 
 # Need to fix
 * ~~Nan will appeares during training the RPN.~~
 * ~~Maybe has problems in RPN generating rois and labels.~~
-* For the toy dataset, maybe the resnext-50 is too large to train.
+* ~~For the toy dataset, maybe the resnext-50 is too large to train.~~
 * ~~When training, rcnn_bbox_loss reduces to zero quickly, accuracy increses to 1.0 quickly.~~
 * The unbalance of positive and negative rois causes a bad performance in bbox regression. Maybe finetune minibatch 
 configs could solving the problem.
@@ -30,7 +32,7 @@ configs could solving the problem.
 # Next
 * Add references.
 * Add commits.
-* Add different backbones.
-* Add test codes.
+* Add different backbones: ~~VGG~~, MobilNet.
+* Add test codes. (Complete after validate the toy dataset.)
 * ~~Fix Nan in training the RPN.~~
-* Training with other datasets as COCO or VOC.
+* Training with other datasets as COCO or VOC. (Complete after validate the toy dataset.)

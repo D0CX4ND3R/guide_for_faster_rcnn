@@ -2,7 +2,7 @@ import numpy as np
 import cv2
 
 
-def generate_shape_image(image_size, n=4):
+def generate_shape_image(image_size, n=6):
     img_h, img_w = image_size
     image = np.random.randint(0, 255, (img_h, img_w, 3), dtype=np.uint8)
     # image = np.zeros((img_h, img_w, 3), dtype=np.uint8)
@@ -72,7 +72,7 @@ def _gen_shape(image_shape, center_pos, radius, shape_type=None, offset=4):
         area = np.pi * radius ** 2
         data = [center_pos, radius]
     elif shape_type == 2:
-        w = radius
+        w = radius * 1.5
         h = (np.random.rand() + 0.5) * w
         pt1 = (int(np.maximum(0, center_pos[0] - w // 2)),
                int(np.minimum(img_w, center_pos[1] - h // 2)))
