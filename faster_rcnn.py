@@ -62,7 +62,7 @@ def process_faster_rcnn(rois, bbox_pred, scores, image_shape):
             predict_x_max = tf.maximum(0., tf.minimum(image_width - 1, predict_x_max))
             predict_y_max = tf.maximum(0., tf.minimum(image_height - 1, predict_y_max))
 
-            predict_bboxes = tf.transpose(tf.stack([predict_x_min, predict_y_min, predict_x_max, predict_y_max]))
+            predict_bboxes = tf.stack([predict_x_min, predict_y_min, predict_x_max, predict_y_max], axis=1)
 
             # NMS
             keep_ind = tf.image.non_max_suppression(predict_bboxes, score,
@@ -106,7 +106,7 @@ def _normalize_rois(rois, img_h, img_w):
     normalized_x2 = x2 / img_w
     normalized_y2 = y2 / img_h
 
-    normalized_rois = tf.transpose(tf.stack([normalized_x1, normalized_y1, normalized_x2, normalized_y2]))
+    normalized_rois = tf.stack([normalized_x1, normalized_y1, normalized_x2, normalized_y2], axis=1)
 
     return tf.stop_gradient(normalized_rois)
 

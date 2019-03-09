@@ -120,15 +120,23 @@ def _main():
                  frc.RPN_LOCATION_LOSS_WEIGHTS * loss_dict['rpn_bbox_loss'] + \
                  frc.FASTER_RCNN_CLASSIFICATION_LOSS_WEIGHTS * loss_dict['rcnn_cls_loss'] + \
                  frc.FASTER_RCNN_LOCATION_LOSS_WEIGHTS * loss_dict['rcnn_bbox_loss'] + \
-                 frc.L2_WEIGHT * tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
+                 tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
 
-    global_step = slim.get_or_create_global_step()
+    global_step = tf.train.get_or_create_global_step()
 
-    learning_rate = tf.train.exponential_decay(learning_rate=0.05, global_step=0, decay_steps=10, decay_rate=0.5)
-    # train_op = tf.train.AdamOptimizer(learning_rate).minimize(total_loss)
-    optimizer = tf.train.AdamOptimizer(learning_rate)
-    gradients = optimizer.compute_gradients(total_loss)
-    train_op = optimizer.apply_gradients(gradients, global_step=global_step)
+    # learning_rate = tf.train.exponential_decay(learning_rate=0.003, global_step=0, decay_steps=10, decay_rate=0.5)
+    boundaries = [200, 2500, 8000, 10000, 12000]
+    lr = [0.005, 0.003, 0.0008, 0.0005, 0.0001, 0.00005]
+    learning_rate = tf.train.piecewise_constant(global_step, boundaries, lr)
+
+    # Adam
+    train_op = tf.train.AdamOptimizer(learning_rate).minimize(total_loss, global_step=global_step)
+    # optimizer = tf.train.AdamOptimizer(learning_rate)
+    # gradients = optimizer.compute_gradients(total_loss)
+    # train_op = optimizer.apply_gradients(gradients, global_step=global_step)
+
+    # Momentum
+    # train_op = tf.train.MomentumOptimizer(learning_rate, momentum=0.9).minimize(total_loss, global_step=global_step)
 
     with tf.name_scope('loss'):
         tf.summary.scalar('total_loss', total_loss)
@@ -139,6 +147,8 @@ def _main():
     with tf.name_scope('accuracy'):
         tf.summary.scalar('rpn_acc',  acc_dict['rpn_cls_acc'])
         tf.summary.scalar('rcnn_acc', acc_dict['rcnn_cls_acc'])
+    with tf.name_scope('train'):
+        tf.summary.scalar('learning_rate', learning_rate)
 
     tf.summary.image('detection/gt', display_image_gt)
     tf.summary.image('detection/25', display_image_25)
@@ -150,8 +160,20 @@ def _main():
 
     saver = tf.train.Saver()
 
+    # pre_train_model_path = os.path.join('./logs/2019_03_08_22_32_42/model', frc.MODEL_NAME + '-19990')
+    pre_train_model_path = None
+    # pre_train_model_path = './logs/2019_03_08_22_32_42/model/'
+    # model_file = saver.recover_last_checkpoints(pre_train_model_path)
+    # print('Last checkpoint:', model_file)
+
     with tf.Session() as sess:
-        sess.run(init_op)
+        if pre_train_model_path is not None:
+            # model_file = saver.recover_last_checkpoints(pre_train_model_path)
+            # print('Last checkpoint:', model_file)
+            saver.restore(sess, pre_train_model_path)
+        else:
+            sess.run(init_op)
+
         start_time = time.strftime('%Y_%m_%d_%H_%M_%S')
         log_dir = os.path.join(frc.SUMMARY_PATH, start_time)
         save_model_dir = os.path.join(log_dir, 'model')
@@ -160,7 +182,7 @@ def _main():
             os.mkdir(save_model_dir)
         summary_writer = tf.summary.FileWriter(log_dir, graph=sess.graph)
 
-        for step in range(frc.MAXIMUM_ITERS):
+        for step in range(frc.MAXIMUM_ITERS + 1):
             images, gt_bboxes = _image_batch(frc.IMAGE_SHAPE)
             feed_dict = {tf_images: images, tf_labels: gt_bboxes, tf_shape: frc.IMAGE_SHAPE}
 

@@ -107,8 +107,8 @@ def decode_bboxes(encoded_pred_bboxes, gt_bboxes, scale_factor=None):
     pred_heights = tf.exp(t_h) * gt_heigths
 
     pred_xx1 = pred_x_centers - pred_widths / 2.0 + 0.5
-    pred_yy1 = pred_x_centers + pred_widths / 2.0 - 0.5
-    pred_xx2 = pred_y_centers - pred_heights / 2.0 + 0.5
-    pred_yy2 = pred_y_centers + pred_heights / 2.0 + 0.5
+    pred_xx2 = pred_x_centers + pred_widths / 2.0 - 0.5
+    pred_yy1 = pred_y_centers - pred_heights / 2.0 + 0.5
+    pred_yy2 = pred_y_centers + pred_heights / 2.0 - 0.5
 
     return tf.stack([pred_xx1, pred_yy1, pred_xx2, pred_yy2], axis=1)

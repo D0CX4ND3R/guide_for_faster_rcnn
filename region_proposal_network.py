@@ -136,11 +136,11 @@ def process_proposal_targets(rpn_rois, gt_bboxes):
 
 def process_rpn_proposals(anchors, rpn_cls_pred, rpn_bbox_pred, image_shape, scale_factor=None):
     # 1. Trans bboxes
-    t_xcenters, t_ycenters, t_w, t_h = tf.unstack(rpn_bbox_pred, axis=1)
+    t_x, t_y, t_w, t_h = tf.unstack(rpn_bbox_pred, axis=1)
 
     if scale_factor:
-        t_xcenters /= scale_factor[0]
-        t_ycenters /= scale_factor[1]
+        t_x /= scale_factor[0]
+        t_y /= scale_factor[1]
         t_w /= scale_factor[2]
         t_h /= scale_factor[3]
 
@@ -158,8 +158,8 @@ def process_rpn_proposals(anchors, rpn_cls_pred, rpn_bbox_pred, image_shape, sca
     # Where (t_x, t_y, t_w, t_h) is the prediction by RPN, (x, y, w, h) is the prediction of bounding box,
     # (x_a, y_a, w_a, h_a) is the generated anchor box.
     # The RPN will be optimized to calculate the coordinates of (t_x, t_y, t_w, t_h).
-    predict_center_x = t_xcenters * anchors_width + anchors_center_x
-    predict_center_y = t_ycenters * anchors_height + anchors_center_y
+    predict_center_x = t_x * anchors_width + anchors_center_x
+    predict_center_y = t_y * anchors_height + anchors_center_y
     predict_width = tf.exp(t_w) * anchors_width
     predict_height = tf.exp(t_h) * anchors_height
 
@@ -176,7 +176,7 @@ def process_rpn_proposals(anchors, rpn_cls_pred, rpn_bbox_pred, image_shape, sca
     predict_x_max = tf.maximum(0., tf.minimum(image_width-1, predict_x_max))
     predict_y_max = tf.maximum(0., tf.minimum(image_height-1, predict_y_max))
 
-    predict_bboxes = tf.transpose(tf.stack([predict_x_min, predict_y_min, predict_x_max, predict_y_max]))
+    predict_bboxes = tf.stack([predict_x_min, predict_y_min, predict_x_max, predict_y_max], axis=1)
 
     predict_targets_count = tf.minimum(frc.RPN_TOP_K_NMS_TRAIN, tf.shape(predict_bboxes)[0])
     sorted_rpn_cls_pred, sorted_pred_indeces = tf.nn.top_k(rpn_cls_pred[:, 1], predict_targets_count)
