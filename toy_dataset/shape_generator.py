@@ -3,7 +3,7 @@ import cv2
 import time
 
 
-def generate_shape_image(image_size, n=4):
+def generate_shape_image(image_size, n=9):
     img_h, img_w = image_size
     image = np.random.randint(0, 255, (img_h, img_w, 3), dtype=np.uint8)
     # image = np.zeros((img_h, img_w, 3), dtype=np.uint8)
@@ -47,31 +47,31 @@ def _calc_box_area(box):
     return (box[2] - box[0]) * (box[3] - box[1])
 
 
-def _gen_centers(n, image_size, board_rate=0.2):
+def _gen_centers(n, image_size, board_rate=0.1):
     # np.random.seed(round(time.time()) % 13)
     img_h, img_w = image_size
-    board_w = np.round(board_rate * img_w)
-    board_h = np.round(board_rate * img_h)
 
-    # unit1 = np.round(np.sqrt(n))
-    # unit2 = np.round(n / unit1)
-    # xx, yy = np.meshgrid(np.arange(unit1), np.arange(unit2))
-    # x_step = img_w // unit1
-    # y_step = img_h // unit2
-    # radius = np.int32(np.round(np.minimum(x_step, y_step) / np.random.randint(2, 6, n)))
-    # center_pos = []
-    # for i in range(xx.shape[0]):
-    #     for j in range(xx.shape[1]):
-    #         pt = [np.random.randint(x_step * xx[i, j] + board_w, x_step * (xx[i, j] + 1) - board_w),
-    #               np.random.randint(y_step * yy[i, j] + board_h, y_step * (yy[i, j] + 1) - board_h)]
-    #         center_pos.append(pt)
-    # # print(center_pos)
-    # center_pos = np.array(center_pos)
-    # # print(center_pos)
+    unit1 = np.round(np.sqrt(n))
+    unit2 = np.round(n / unit1)
+    xx, yy = np.meshgrid(np.arange(unit1), np.arange(unit2))
+    x_step = img_w // unit1
+    y_step = img_h // unit2
+    board_w = np.round(board_rate * x_step)
+    board_h = np.round(board_rate * y_step)
+    radius = np.int32(np.round(np.minimum(x_step, y_step) / np.random.randint(2, 5, n)))
+    center_pos = []
+    for i in range(xx.shape[0]):
+        for j in range(xx.shape[1]):
+            pt = [np.random.randint(x_step * xx[i, j] + board_w, x_step * (xx[i, j] + 1) - board_w),
+                  np.random.randint(y_step * yy[i, j] + board_h, y_step * (yy[i, j] + 1) - board_h)]
+            center_pos.append(pt)
+    # print(center_pos)
+    center_pos = np.array(center_pos)
+    # print(center_pos)
 
-    radius = np.int32(np.round(np.minimum(img_h, img_w) / np.random.randint(5, 10, n)))
-    center_pos = np.concatenate([np.random.randint(board_w, img_w - board_w + 1, size=(n, 1), dtype=np.int32),
-                                 np.random.randint(board_h, img_h - board_h + 1, size=(n, 1), dtype=np.int32)], axis=1)
+    # radius = np.int32(np.round(np.minimum(img_h, img_w) / np.random.randint(5, 10, n)))
+    # center_pos = np.concatenate([np.random.randint(board_w, img_w - board_w + 1, size=(n, 1), dtype=np.int32),
+    #                              np.random.randint(board_h, img_h - board_h + 1, size=(n, 1), dtype=np.int32)], axis=1)
     # print(center_pos)
 
     return center_pos, np.sort(radius)[::-1]
