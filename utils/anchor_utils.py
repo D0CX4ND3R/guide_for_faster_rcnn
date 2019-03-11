@@ -74,8 +74,8 @@ def encode_bboxes(pred_bboxes, gt_bboxes, scale_factor=None):
     gt_widths = gt_widths + 1e-8
     gt_heigths = gt_heigths + 1e-8
 
-    t_x = (pred_x_centers - gt_x_centers) / gt_x_centers
-    t_y = (pred_y_centers - gt_y_centers) / gt_y_centers
+    t_x = (pred_x_centers - gt_x_centers) / gt_widths
+    t_y = (pred_y_centers - gt_y_centers) / gt_heigths
     t_w = np.log(pred_widths / gt_widths)
     t_h = np.log(pred_heigths / gt_heigths)
 
@@ -101,8 +101,8 @@ def decode_bboxes(encoded_pred_bboxes, gt_bboxes, scale_factor=None):
     gt_x_centers = (xx2 + xx1) / 2
     gt_y_centers = (yy2 + yy1) / 2
 
-    pred_x_centers = t_x * gt_x_centers + gt_x_centers
-    pred_y_centers = t_y * gt_y_centers + gt_y_centers
+    pred_x_centers = t_x * gt_widths + gt_x_centers
+    pred_y_centers = t_y * gt_heigths + gt_y_centers
     pred_widths = tf.exp(t_w) * gt_widths
     pred_heights = tf.exp(t_h) * gt_heigths
 

@@ -58,7 +58,7 @@ def _gen_centers(n, image_size, board_rate=0.1):
     y_step = img_h // unit2
     board_w = np.round(board_rate * x_step)
     board_h = np.round(board_rate * y_step)
-    radius = np.int32(np.round(np.minimum(x_step, y_step) / np.random.randint(2, 5, n)))
+    radius = np.int32(np.round(np.minimum(x_step, y_step) / np.random.randint(3, 6, n)))
     center_pos = []
     for i in range(xx.shape[0]):
         for j in range(xx.shape[1]):

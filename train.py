@@ -125,8 +125,9 @@ def _main():
     global_step = tf.train.get_or_create_global_step()
 
     # learning_rate = tf.train.exponential_decay(learning_rate=0.003, global_step=0, decay_steps=10, decay_rate=0.5)
-    boundaries = [200, 2500, 8000, 10000, 12000]
-    lr = [0.005, 0.003, 0.0008, 0.0005, 0.0001, 0.00005]
+    # boundaries = [200, 2500, 8000, 10000, 12000]
+    boundaries = [2000, 3000, 4000]
+    lr = [0.003, 0.0005, 0.0001, 0.00005]
     learning_rate = tf.train.piecewise_constant(global_step, boundaries, lr)
 
     # Adam

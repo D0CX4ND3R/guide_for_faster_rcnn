@@ -21,7 +21,7 @@ def faster_rcnn(features, rois, image_shape, is_training=True):
         # Fully connected
         net_flatten = cnn.head(roi_features)
 
-        with slim.arg_scope([slim.fully_connected], weights_regularizer=slim.l2_regularizer(0.0005),
+        with slim.arg_scope([slim.fully_connected], weights_regularizer=slim.l2_regularizer(frc.L2_WEIGHT),
                             weights_initializer=slim.variance_scaling_initializer(1.0, mode='FAN_AVG', uniform=True),
                             activation_fn=None, trainable=is_training):
             cls_score = slim.fully_connected(net_flatten, frc.NUM_CLS + 1, scope='cls_fc')
@@ -106,7 +106,8 @@ def _normalize_rois(rois, img_h, img_w):
     normalized_x2 = x2 / img_w
     normalized_y2 = y2 / img_h
 
-    normalized_rois = tf.stack([normalized_x1, normalized_y1, normalized_x2, normalized_y2], axis=1)
+    # normalized coordinates [y1, x1, y2, x2]
+    normalized_rois = tf.stack([normalized_y1, normalized_x1, normalized_y2, normalized_x2], axis=1)
 
     return tf.stop_gradient(normalized_rois)
 

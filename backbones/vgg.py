@@ -8,7 +8,7 @@ _l2_weight = 0.0005
 # STRIDE_SIZE = 16
 
 
-def inference(inputs, is_training=True, num_layers=16, name='vgg'):
+def inference(inputs, is_training=True, num_layers=11, name='vgg'):
     assert type(num_layers) == int
     assert num_layers in [11, 13, 16, 19]
 
@@ -52,7 +52,7 @@ def inference(inputs, is_training=True, num_layers=16, name='vgg'):
     return net
 
 
-def head(net, feature_dim=1024, is_training=True, num_layers=16, name='vgg'):
+def head(net, feature_dim=1024, is_training=True, num_layers=11, name='vgg'):
     assert type(num_layers) == int
     assert num_layers in [11, 13, 16, 19]
 
