@@ -161,6 +161,9 @@ def _main():
 
     saver = tf.train.Saver()
 
+    if not os.path.exists(frc.SUMMARY_PATH):
+        os.mkdir(frc.SUMMARY_PATH)
+
     # pre_train_model_path = os.path.join('./logs/2019_03_08_22_32_42/model', frc.MODEL_NAME + '-19990')
     pre_train_model_path = None
     # pre_train_model_path = './logs/2019_03_08_22_32_42/model/'
@@ -178,6 +181,7 @@ def _main():
         start_time = time.strftime('%Y_%m_%d_%H_%M_%S')
         log_dir = os.path.join(frc.SUMMARY_PATH, start_time)
         save_model_dir = os.path.join(log_dir, 'model')
+
         if not os.path.exists(save_model_dir):
             os.mkdir(log_dir)
             os.mkdir(save_model_dir)
