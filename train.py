@@ -24,14 +24,14 @@ def _network(inputs, image_shape, gt_bboxes):
 
     features = slim.conv2d(feature_map, 512, [3, 3], normalizer_fn=slim.batch_norm,
                            normalizer_params={'decay': 0.995, 'epsilon': 0.0001},
-                           weights_regularizer=slim.l2_regularizer(0.0005),
+                           weights_regularizer=slim.l2_regularizer(frc.L2_WEIGHT),
                            scope='rpn_feature')
 
     # RPN
     rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss, rois, labels, bbox_targets = rpn(features, image_shape, gt_bboxes)
 
-    # TODO: Add summary
-    class_names = ['BG', 'circle', 'rectangle', 'triangle']
+    # Image summary for RPN rois
+    class_names = frc.CLS_NAMES + ['circle', 'rectangle', 'triangle']
     display_rois_img = tf.reshape(inputs, shape=[frc.IMAGE_SHAPE[0], frc.IMAGE_SHAPE[1], 3])
     for i in range(frc.NUM_CLS + 1):
         display_indices = tf.reshape(tf.where(tf.equal(labels, i)), [-1])
@@ -41,6 +41,7 @@ def _network(inputs, image_shape, gt_bboxes):
 
     # RCNN
     cls_score, bbox_pred = faster_rcnn(features, rois, image_shape)
+
     cls_prob = slim.softmax(cls_score)
     cls_categories = tf.cast(tf.argmax(cls_prob, axis=1), dtype=tf.int32)
     rcnn_cls_acc = tf.reduce_mean(tf.cast(tf.equal(cls_categories, tf.cast(labels, tf.int32)), tf.float32))
@@ -48,6 +49,44 @@ def _network(inputs, image_shape, gt_bboxes):
     final_bbox, final_score, final_categories = process_faster_rcnn(rois, bbox_pred, cls_prob, image_shape)
 
     rcnn_bbox_loss, rcnn_cls_loss = build_faster_rcnn_losses(bbox_pred, bbox_targets, cls_prob, labels, frc.NUM_CLS + 1)
+
+    # ------------------------------BEGIN SUMMARY--------------------------------
+    # Add predicted bbox with confidence 0.25, 0.5, 0.75 and ground truth in image summary.
+    with tf.name_scope('rcnn_image_summary'):
+        display_indices_25 = tf.reshape(tf.where(tf.greater_equal(final_score, 0.25) &
+                                                 tf.less(final_score, 0.5) &
+                                                 tf.not_equal(final_categories, 0)), [-1])
+        display_indices_50 = tf.reshape(tf.where(tf.greater_equal(final_score, 0.5) &
+                                                 tf.less(final_score, 0.75) &
+                                                 tf.not_equal(final_categories, 0)), [-1])
+        display_indices_75 = tf.reshape(tf.where(tf.greater_equal(final_score, 0.75) &
+                                                 tf.not_equal(final_categories, 0)), [-1])
+
+        display_bboxes_25 = tf.gather(final_bbox, display_indices_25)
+        display_bboxes_50 = tf.gather(final_bbox, display_indices_50)
+        display_bboxes_75 = tf.gather(final_bbox, display_indices_75)
+        display_categories_25 = tf.gather(final_categories, display_indices_25)
+        display_categories_50 = tf.gather(final_categories, display_indices_50)
+        display_categories_75 = tf.gather(final_categories, display_indices_75)
+
+        display_image_25 = tf.py_func(draw_rectangle_with_name,
+                                      [inputs[0], display_bboxes_25, display_categories_25, class_names],
+                                      [tf.uint8])
+        display_image_50 = tf.py_func(draw_rectangle_with_name,
+                                      [inputs[0], display_bboxes_50, display_categories_50, class_names],
+                                      [tf.uint8])
+        display_image_75 = tf.py_func(draw_rectangle_with_name,
+                                      [inputs[0], display_bboxes_75, display_categories_75, class_names],
+                                      [tf.uint8])
+        display_image_gt = tf.py_func(draw_rectangle_with_name,
+                                      [inputs[0], gt_bboxes[:, :-1], gt_bboxes[:, -1], class_names],
+                                      [tf.uint8])
+
+    tf.summary.image('detection/gt', display_image_gt)
+    tf.summary.image('detection/25', display_image_25)
+    tf.summary.image('detection/50', display_image_50)
+    tf.summary.image('detection/75', display_image_75)
+    # -------------------------------END SUMMARY---------------------------------
 
     loss_dict = {'rpn_cls_loss': rpn_cls_loss,
                  'rpn_bbox_loss': rpn_bbox_loss,
@@ -75,46 +114,17 @@ def _preprocess(inputs, image_shape=None):
 
 
 def _main():
-    tf_images = tf.placeholder(dtype=tf.float32,
-                               shape=[frc.IMAGE_BATCH_SIZE, frc.IMAGE_SHAPE[0], frc.IMAGE_SHAPE[1], 3],
-                               name='images')
+    with tf.name_scope('inputs'):
+        tf_images = tf.placeholder(dtype=tf.float32,
+                                   shape=[frc.IMAGE_BATCH_SIZE, frc.IMAGE_SHAPE[0], frc.IMAGE_SHAPE[1], 3],
+                                   name='images')
+        tf_labels = tf.placeholder(dtype=tf.int32, shape=[None, 5], name='ground_truth_bbox')
+        tf_shape = tf.placeholder(dtype=tf.int32, shape=[None], name='image_shape')
 
-    tf_labels = tf.placeholder(dtype=tf.int32, shape=[None, 5], name='ground_truth_bbox')
-
-    tf_shape = tf.placeholder(dtype=tf.int32, shape=[None], name='image_shape')
-
+    # Preprocess input images
     preprocessed_inputs = _preprocess(tf_images)
 
     final_bbox, final_score, final_categories, loss_dict, acc_dict = _network(preprocessed_inputs, tf_shape, tf_labels)
-
-    display_indices_25 = tf.reshape(tf.where(tf.greater_equal(final_score, 0.25) &
-                                             tf.less(final_score, 0.5) &
-                                             tf.not_equal(final_categories, 0)), [-1])
-    display_indices_50 = tf.reshape(tf.where(tf.greater_equal(final_score, 0.5) &
-                                             tf.less(final_score, 0.75) &
-                                             tf.not_equal(final_categories, 0)), [-1])
-    display_indices_75 = tf.reshape(tf.where(tf.greater_equal(final_score, 0.75) &
-                                             tf.not_equal(final_categories, 0)), [-1])
-    display_bboxes_25 = tf.gather(final_bbox, display_indices_25)
-    display_bboxes_50 = tf.gather(final_bbox, display_indices_50)
-    display_bboxes_75 = tf.gather(final_bbox, display_indices_75)
-    display_categories_25 = tf.gather(final_categories, display_indices_25)
-    display_categories_50 = tf.gather(final_categories, display_indices_50)
-    display_categories_75 = tf.gather(final_categories, display_indices_75)
-
-    cls_names = [u'BG', u'circle', u'rectangle', u'triangle']
-    display_image_25 = tf.py_func(draw_rectangle_with_name,
-                                  [tf_images[0], display_bboxes_25, display_categories_25, cls_names],
-                                  [tf.uint8])
-    display_image_50 = tf.py_func(draw_rectangle_with_name,
-                                  [tf_images[0], display_bboxes_50, display_categories_50, cls_names],
-                                  [tf.uint8])
-    display_image_75 = tf.py_func(draw_rectangle_with_name,
-                                  [tf_images[0], display_bboxes_75, display_categories_75, cls_names],
-                                  [tf.uint8])
-    display_image_gt = tf.py_func(draw_rectangle_with_name,
-                                  [tf_images[0], tf_labels[:, :-1], tf_labels[:, -1], cls_names],
-                                  [tf.uint8])
 
     total_loss = frc.RPN_CLASSIFICATION_LOSS_WEIGHTS * loss_dict['rpn_cls_loss'] + \
                  frc.RPN_LOCATION_LOSS_WEIGHTS * loss_dict['rpn_bbox_loss'] + \
@@ -124,21 +134,18 @@ def _main():
 
     global_step = tf.train.get_or_create_global_step()
 
-    # learning_rate = tf.train.exponential_decay(learning_rate=0.003, global_step=0, decay_steps=10, decay_rate=0.5)
-    # boundaries = [200, 2500, 8000, 10000, 12000]
-    boundaries = [2000, 3000, 4000]
-    lr = [0.003, 0.0005, 0.0001, 0.00005]
-    learning_rate = tf.train.piecewise_constant(global_step, boundaries, lr)
+    learning_rate = tf.train.piecewise_constant(global_step, frc.LEARNING_RATE_BOUNDARIES, frc.LEARNING_RATE_SCHEDULAR)
 
     # Adam
     train_op = tf.train.AdamOptimizer(learning_rate).minimize(total_loss, global_step=global_step)
-    # optimizer = tf.train.AdamOptimizer(learning_rate)
-    # gradients = optimizer.compute_gradients(total_loss)
-    # train_op = optimizer.apply_gradients(gradients, global_step=global_step)
 
     # Momentum
     # train_op = tf.train.MomentumOptimizer(learning_rate, momentum=0.9).minimize(total_loss, global_step=global_step)
 
+    # RMS
+    # train_op = tf.train.RMSPropOptimizer(learning_rate, momentum=0.9).minimize(total_loss, global_step=global_step)
+
+    # Add train summary.
     with tf.name_scope('loss'):
         tf.summary.scalar('total_loss', total_loss)
         tf.summary.scalar('rpn_cls_loss', loss_dict['rpn_cls_loss'])
@@ -151,11 +158,6 @@ def _main():
     with tf.name_scope('train'):
         tf.summary.scalar('learning_rate', learning_rate)
 
-    tf.summary.image('detection/gt', display_image_gt)
-    tf.summary.image('detection/25', display_image_25)
-    tf.summary.image('detection/50', display_image_50)
-    tf.summary.image('detection/75', display_image_75)
-
     summary_op = tf.summary.merge_all()
     init_op = tf.group(tf.global_variables_initializer(), tf.local_variables_initializer())
 
@@ -164,17 +166,10 @@ def _main():
     if not os.path.exists(frc.SUMMARY_PATH):
         os.mkdir(frc.SUMMARY_PATH)
 
-    # pre_train_model_path = os.path.join('./logs/2019_03_08_22_32_42/model', frc.MODEL_NAME + '-19990')
-    pre_train_model_path = None
-    # pre_train_model_path = './logs/2019_03_08_22_32_42/model/'
-    # model_file = saver.recover_last_checkpoints(pre_train_model_path)
-    # print('Last checkpoint:', model_file)
-
     with tf.Session() as sess:
-        if pre_train_model_path is not None:
-            # model_file = saver.recover_last_checkpoints(pre_train_model_path)
-            # print('Last checkpoint:', model_file)
-            saver.restore(sess, pre_train_model_path)
+        if frc.PRE_TRAIN_MODEL_PATH:
+            print('Load pre-trained model:', frc.PRE_TRAIN_MODEL_PATH)
+            saver.restore(sess, frc.PRE_TRAIN_MODEL_PATH)
         else:
             sess.run(init_op)
 
@@ -217,7 +212,7 @@ def _main():
                 summary_writer.add_summary(summary_str, step)
                 summary_writer.flush()
 
-                saver.save(sess, os.path.join(save_model_dir, frc.MODEL_NAME), step)
+                saver.save(sess, os.path.join(save_model_dir, frc.MODEL_NAME + '.ckpt'), step)
     summary_writer.close()
 
 

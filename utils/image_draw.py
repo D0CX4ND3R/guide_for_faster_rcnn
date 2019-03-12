@@ -3,8 +3,8 @@ import cv2
 
 
 def draw_rectangle_with_name(image, bboxes, categories, cls_names):
-    image = np.uint8(image)
-    img_h = image.shape[1]
+    img = np.uint8(image.copy())
+    img_h = img.shape[1]
     n = len(bboxes)
     colors = [(255, 0, 255), (0, 255, 0), (255, 255, 255)]
     for i in range(n):
@@ -16,10 +16,10 @@ def draw_rectangle_with_name(image, bboxes, categories, cls_names):
         pt = (int(np.maximum(0, box[0])),
               int(np.minimum(img_h, box[3])))
 
-        image = cv2.rectangle(image, pt1, pt2, colors[categ-1], 3)
-        image = cv2.putText(image, cls, pt, cv2.FONT_HERSHEY_COMPLEX, 1.0, colors[categ-1], 2)
+        img = cv2.rectangle(img, pt1, pt2, colors[categ - 1], 3)
+        img = cv2.putText(img, cls, pt, cv2.FONT_HERSHEY_COMPLEX, 1.0, colors[categ - 1], 2)
 
-    return image
+    return img
 
 
 def draw_rectangle(image, bboxes):
