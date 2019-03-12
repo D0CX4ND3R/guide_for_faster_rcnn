@@ -1,6 +1,6 @@
 # Guide for building faster rcnn
-Reproduction of Faster R-CNN by tensorflow. Guide to build an own Faster R-CNN.
-Aiming to build up faster rcnn for beginner. Easy to read and understand with comments.
+Reproduction of Faster R-CNN by tensorflow. Aiming to build Faster RCNN for beginner. 
+Easy to read and understand with comments.
 Train a toy dataset generates circles, rectangles and triangles.
 
 # Requires
@@ -12,6 +12,12 @@ opencv >= 3.4.0
 `
 python train.py
 `
+
+## Testing
+`
+python test.py
+`
+
 ## Use Tensorboard
 `
 tensorboard --logdir=./logs
