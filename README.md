@@ -1,5 +1,6 @@
 # Guide for building faster rcnn
 Reproduction of Faster R-CNN by tensorflow. Guide to build an own Faster R-CNN.
+Aiming to build up faster rcnn for beginner. Easy to read and understand with comments.
 Train a toy dataset generates circles, rectangles and triangles.
 
 # Requires
@@ -17,22 +18,13 @@ tensorboard --logdir=./logs
 `
 
 # Others
-~~The backbone is ResNeXt-50, now only support batch_size=1.~~
+Batch size only supported 1.
+Only the toy_dataset available.
 
-Two backbones can be chosen for training the toy dataset, ResNeXt-50 and VGG(default VGG-13).
-
-# Need to fix
-* ~~Nan will appeares during training the RPN.~~
-* ~~Maybe has problems in RPN generating rois and labels.~~
-* ~~For the toy dataset, maybe the resnext-50 is too large to train.~~
-* ~~When training, rcnn_bbox_loss reduces to zero quickly, accuracy increses to 1.0 quickly.~~
-* The unbalance of positive and negative rois causes a bad performance in bbox regression. Maybe finetune minibatch 
-configs could solving the problem.
 
 # Next
 * Add references.
-* Add commits.
+* Add comments.
 * Add different backbones: ~~VGG~~, MobileNet.
 * Add test codes. (Complete after validate the toy dataset.)
-* ~~Fix Nan in training the RPN.~~
 * Training with other datasets as COCO or VOC. (Complete after validate the toy dataset.)
