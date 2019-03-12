@@ -2,11 +2,15 @@ import numpy as np
 import cv2
 
 
+_colors = [(255, 255, 255), (255, 255, 0), (0, 255, 255), (255, 0, 255), (255, 0, 0), (0, 255, 0), (0, 0, 255),
+           (128, 128, 128), (128, 128, 0), (0, 128, 128), (128, 0, 128), (128, 0, 0), (0, 128, 0), (0, 0, 128)]
+
+
 def draw_rectangle_with_name(image, bboxes, categories, cls_names):
     img = np.uint8(image.copy())
     img_h = img.shape[1]
     n = len(bboxes)
-    colors = [(255, 0, 255), (0, 255, 0), (255, 255, 255)]
+
     for i in range(n):
         box = bboxes[i]
         categ = int(categories[i])
@@ -16,8 +20,8 @@ def draw_rectangle_with_name(image, bboxes, categories, cls_names):
         pt = (int(np.maximum(0, box[0])),
               int(np.minimum(img_h, box[3])))
 
-        img = cv2.rectangle(img, pt1, pt2, colors[categ - 1], 3)
-        img = cv2.putText(img, cls, pt, cv2.FONT_HERSHEY_COMPLEX, 1.0, colors[categ - 1], 2)
+        img = cv2.rectangle(img, pt1, pt2, _colors[categ - 1], 3)
+        img = cv2.putText(img, cls, pt, cv2.FONT_HERSHEY_COMPLEX, 1.0, _colors[categ - 1], 2)
 
     return img
 
