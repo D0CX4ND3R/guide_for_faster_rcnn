@@ -98,15 +98,11 @@ def _network(inputs, image_shape, gt_bboxes):
     return final_bbox, final_score, final_categories, loss_dict, acc_dict
 
 
-def _image_batch(image_shape=None, batch_size=1):
-    if image_shape is None:
-        image_shape = [224, 224]
-
+def _image_batch(image_shape, batch_size=1):
     batch_image, bboxes, labels, _ = generate_shape_image(image_shape)
-
     batch_image = batch_image.reshape((batch_size, image_shape[0], image_shape[1], 3))
 
-    return batch_image, np.hstack([bboxes, labels[:, np.newaxis]])
+    return batch_image, np.hstack([bboxes, labels[:, np.newaxis]]), image_shape
 
 
 def _preprocess(inputs, image_shape=None):
@@ -182,37 +178,47 @@ def _main():
             os.mkdir(save_model_dir)
         summary_writer = tf.summary.FileWriter(log_dir, graph=sess.graph)
 
-        for step in range(frc.MAXIMUM_ITERS + 1):
-            images, gt_bboxes = _image_batch(frc.IMAGE_SHAPE)
-            feed_dict = {tf_images: images, tf_labels: gt_bboxes, tf_shape: frc.IMAGE_SHAPE}
+        coord = tf.train.Coordinator()
+        threads = tf.train.start_queue_runners(sess, coord)
 
-            if step % frc.REFRESH_LOGS_ITERS != 0:
-                _, global_step_ = sess.run([train_op, global_step], feed_dict)
-            else:
-                step_time = time.time()
+        try:
+            for step in range(frc.MAXIMUM_ITERS + 1):
+                images, gt_bboxes, image_shape = _image_batch(image_shape=frc.IMAGE_SHAPE)
+                feed_dict = {tf_images: images, tf_labels: gt_bboxes, tf_shape: image_shape}
 
-                _, total_loss_, rpn_cls_loss_, rpn_bbox_loss_, rcnn_cls_loss_, rcnn_bbox_loss_, \
-                rpn_cls_acc_, rcnn_cls_acc_, summary_str, global_step_ = \
-                    sess.run([train_op, total_loss, loss_dict['rpn_cls_loss'], loss_dict['rpn_bbox_loss'],
-                              loss_dict['rcnn_cls_loss'], loss_dict['rcnn_bbox_loss'],
-                              acc_dict['rpn_cls_acc'], acc_dict['rcnn_cls_acc'], summary_op, global_step], feed_dict)
+                if step % frc.REFRESH_LOGS_ITERS != 0:
+                    _, global_step_ = sess.run([train_op, global_step], feed_dict)
+                else:
+                    step_time = time.time()
 
-                step_time = time.time() - step_time
+                    _, total_loss_, rpn_cls_loss_, rpn_bbox_loss_, rcnn_cls_loss_, rcnn_bbox_loss_, \
+                    rpn_cls_acc_, rcnn_cls_acc_, summary_str, global_step_ = \
+                        sess.run([train_op, total_loss, loss_dict['rpn_cls_loss'], loss_dict['rpn_bbox_loss'],
+                                  loss_dict['rcnn_cls_loss'], loss_dict['rcnn_bbox_loss'],
+                                  acc_dict['rpn_cls_acc'], acc_dict['rcnn_cls_acc'], summary_op, global_step], feed_dict)
 
-                print(f'Iter: {step}',
-                      f'| total_loss: {total_loss_:.3}',
-                      f'| rpn_cls_loss: {rpn_cls_loss_:.3}',
-                      f'| rpn_bbox_loss: {rpn_bbox_loss_:.3}',
-                      f'| rcnn_cls_loss: {rcnn_cls_loss_:.3}',
-                      f'| rcnn_bbox_loss: {rcnn_bbox_loss_:.3}',
-                      f'| rpn_cls_acc: {rpn_cls_acc_:.3}',
-                      f'| rcnn_cls_acc: {rcnn_cls_acc_:.3}',
-                      f'| time: {step_time:.3}s')
+                    step_time = time.time() - step_time
 
-                summary_writer.add_summary(summary_str, step)
-                summary_writer.flush()
+                    print(f'Iter: {step}',
+                          f'| total_loss: {total_loss_:.3}',
+                          f'| rpn_cls_loss: {rpn_cls_loss_:.3}',
+                          f'| rpn_bbox_loss: {rpn_bbox_loss_:.3}',
+                          f'| rcnn_cls_loss: {rcnn_cls_loss_:.3}',
+                          f'| rcnn_bbox_loss: {rcnn_bbox_loss_:.3}',
+                          f'| rpn_cls_acc: {rpn_cls_acc_:.3}',
+                          f'| rcnn_cls_acc: {rcnn_cls_acc_:.3}',
+                          f'| time: {step_time:.3}s')
 
-                saver.save(sess, os.path.join(save_model_dir, frc.MODEL_NAME + '.ckpt'), step)
+                    summary_writer.add_summary(summary_str, step)
+                    summary_writer.flush()
+
+                    saver.save(sess, os.path.join(save_model_dir, frc.MODEL_NAME + '.ckpt'), step)
+
+        except tf.errors.OutOfRangeError:
+            print('done')
+        finally:
+            coord.request_stop()
+        coord.join(threads)
     summary_writer.close()
 
 
