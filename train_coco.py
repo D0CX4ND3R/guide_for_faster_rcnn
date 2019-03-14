@@ -7,7 +7,7 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.contrib import slim
 
-from toy_dataset.shape_generator import generate_shape_image
+from toy_dataset.coco_dataset import load_translated_data
 from region_proposal_network import rpn
 from faster_rcnn import faster_rcnn, process_faster_rcnn, build_faster_rcnn_losses
 
@@ -100,9 +100,8 @@ def _network(inputs, image_shape, gt_bboxes):
     return final_bbox, final_score, final_categories, loss_dict, acc_dict
 
 
-def _image_batch(image_shape=None, batch_size=1):
-    if image_shape is None:
-        image_shape = [224, 224]
+def _image_batch(dataset_path, batch_size=1):
+    train_list, test_list, cls_list = load_translated_data(dataset_path)
 
     batch_image, bboxes, labels, _ = generate_shape_image(image_shape)
     batch_image = batch_image.astype(dtype=np.float32).reshape((batch_size, image_shape[0], image_shape[1], 3))
@@ -115,7 +114,7 @@ def _image_batch(image_shape=None, batch_size=1):
     return tf.train.batch(input_queue, batch_size=batch_size)
 
 
-def _preprocess(inputs, flip=False, ):
+def _preprocess(inputs, is_training):
 
     return inputs
 
