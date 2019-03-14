@@ -28,7 +28,7 @@ def draw_rectangle_with_name(image, bboxes, categories, cls_names):
     assert len(cls_names) <= len(_colors)
 
     img = np.uint8(image.copy())
-    img_h = img.shape[1]
+    img_h = img.shape[0]
     n = len(bboxes)
 
     for i in range(n):
@@ -37,8 +37,7 @@ def draw_rectangle_with_name(image, bboxes, categories, cls_names):
         cls = str(cls_names[categ])
         pt1 = (int(box[0]), int(box[1]))
         pt2 = (int(box[2]), int(box[3]))
-        pt = (int(np.maximum(0, box[0])),
-              int(np.minimum(img_h, box[3])))
+        pt = (int(box[0]), int(box[3]))
 
         img = cv2.rectangle(img, pt1, pt2, _colors[categ - 1], 3)
         img = cv2.putText(img, cls, pt, cv2.FONT_HERSHEY_COMPLEX, 1.0, _colors[categ - 1], 2)
