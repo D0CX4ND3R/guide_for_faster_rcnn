@@ -6,11 +6,11 @@ GPU_ID = 0
 
 # DATA CONFIGS
 IMAGE_BATCH_SIZE = 1
-IMAGE_SHAPE = [448, 448]
+IMAGE_SHAPE = None
 DATASET_PATH = None
 ANNO_PATH = None
 LABEL_PATH = None
-NUM_CLS = 3     # Exclude background
+NUM_CLS = 80     # Exclude background
 CLS_NAMES = ['BG']
 
 # TRAIN CONFIGS
