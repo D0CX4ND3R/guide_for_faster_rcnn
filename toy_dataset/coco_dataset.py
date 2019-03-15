@@ -1,5 +1,6 @@
 import os
 import numpy as np
+import random
 import cv2
 from pycocotools.coco import COCO
 
@@ -34,7 +35,8 @@ def trans_coco_dataset(coco_dataset_path):
                 ann_info = coco.loadAnns(ann_id)
 
                 file_name = img_info['file_name'].split('.')[0]
-                list_file_writer.write(file_name + '\n')
+                height, width = img_info['height'], img_info['width']
+                list_file_writer.write(' '.join([file_name, str(height), str(width), '\n']))
 
                 with open(os.path.join(label_path, file_name), 'w') as ann_writer:
                     for ann in ann_info:
@@ -63,18 +65,31 @@ def load_translated_data(coco_dataset_path):
     val_file = os.path.join(coco_dataset_path, 'val')
     cls_file = os.path.join(coco_dataset_path, 'classes')
 
+    train_file_list = []
+    train_label_list = []
+    train_image_size_list = []
     with open(train_file, 'r') as reader:
-        train_file_list = [line[:-1] for line in reader]
-        # print(train_file_list[0])
+        for line in reader:
+            file_name, height, width = line.split()
+            train_file_list.append(os.path.join(coco_dataset_path, 'train2017', file_name + '.jpg'))
+            train_label_list.append(os.path.join(coco_dataset_path, 'labels', file_name))
+            train_image_size_list.append([int(height), int(width)])
 
+    val_file_list = []
+    val_label_list = []
+    val_image_size_list = []
     with open(val_file, 'r') as reader:
-        val_file_list = [line[:-1] for line in reader]
-        # print(val_file_list[0])
+        for line in reader:
+            file_name, height, width = line.split()
+            val_file_list.append(os.path.join(coco_dataset_path, 'val2017', file_name + '.jpg'))
+            val_label_list.append(os.path.join(coco_dataset_path, 'labels', file_name))
+            val_image_size_list.append([int(height), int(width)])
 
     with open(cls_file, 'r') as reader:
         cls_list = [line[:-1] for line in reader]
 
-    return train_file_list, val_file_list, ['BG'] + cls_list
+    return train_file_list, train_label_list, train_image_size_list, \
+           val_file_list, val_label_list, val_image_size_list, cls_list
 
 
 def get_label_infos(label_file_path):
@@ -86,6 +101,15 @@ def get_label_infos(label_file_path):
             bboxes.append([int(x1), int(y1), int(x2), int(y2)])
             categories.append(int(cls))
     return bboxes, categories
+
+
+def get_gt_infos(label_file_path):
+    with open(label_file_path, 'r') as reader:
+        gt_bboxes = []
+        for line in reader:
+            x1, y1, x2, y2, cls = line.split()
+            gt_bboxes.append([int(x1), int(y1), int(x2), int(y2), int(cls)])
+    return gt_bboxes
 
 
 if __name__ == '__main__':
@@ -105,21 +129,42 @@ if __name__ == '__main__':
 
     # trans_coco_dataset(COCO_PATH)
 
-    train_file_list, val_file_list, cls_names = load_translated_data(COCO_PATH)
+    train_file_list, train_label_list, train_image_size_list, \
+    val_file_list, val_label_list, val_image_size_list, cls_names = load_translated_data(COCO_PATH)
 
-    for fn in train_file_list:
-        img_file_path = os.path.join(COCO_PATH, 'train2017', fn + '.jpg')
-        label_file_path = os.path.join(COCO_PATH, 'labels', fn)
 
-        img = cv2.imread(img_file_path)
-        bboxes, categories = get_label_infos(label_file_path)
-        # print(categories)
+    def _image_batch(image_list, label_list, size_list, batch_size=1):
+        total_samples = len(image_list)
+        while True:
+            ind = random.choice(range(total_samples))
+            img = cv2.imread(image_list[ind])
+            gt_bboxes = np.array(get_gt_infos(label_list[ind]))
+            img_size = np.array(size_list[ind])
+            yield img, gt_bboxes, img_size
 
-        img = draw_rectangle_with_name(img, bboxes, categories, cls_names)
 
+    cls_names = ['BG'] + cls_names
+
+    g = _image_batch(train_file_list, train_label_list, train_image_size_list)
+    total_samples = len(train_file_list)
+    while cv2.waitKey(2000) & 0xFF != ord('q'):
+        img, gt_bboxes, img_size = g.__next__()
+        img = draw_rectangle_with_name(img, gt_bboxes[:, :-1], gt_bboxes[:, -1], cls_names)
         cv2.imshow('coco', img)
-        if cv2.waitKey(2000) & 0xFF == ord('q'):
-            break
 
+        print('Image height: {} width: {}'.format(img_size[0], img_size[1]))
     cv2.destroyAllWindows()
+
+    # for img_file_path, label_file_path, img_size in zip(train_file_list, train_label_list, train_image_size_list):
+    #     img = cv2.imread(img_file_path)
+    #     bboxes, categories = get_label_infos(label_file_path)
+    #     print('Image height: {} width: {}'.format(img_size[0], img_size[1]))
+    #
+    #     img = draw_rectangle_with_name(img, bboxes, categories, cls_names)
+    #
+    #     cv2.imshow('coco', img)
+    #     if cv2.waitKey(2000) & 0xFF == ord('q'):
+    #         break
+    #
+    # cv2.destroyAllWindows()
 
