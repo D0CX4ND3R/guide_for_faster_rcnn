@@ -112,6 +112,32 @@ def get_gt_infos(label_file_path):
     return gt_bboxes
 
 
+def analyse_dataset(image_list, label_list, cls_names, print_info=True):
+    total_image_count = len(image_list)
+    processed_image_count = 0
+    total_target_count = 0
+    bins = np.zeros(shape=(1, len(cls_names)), dtype=np.float32)
+    color_mean = np.zeros(shape=(1, 3), dtype=np.float32)
+    for img_file, label_file in zip(image_list, label_list):
+        processed_image_count += 1
+        img = cv2.imread(img_file)
+        if len(img.shape) == 2:
+            img = np.dstack([img] * 3)
+        m = img.mean(axis=(0, 1))
+        color_mean = (color_mean * (processed_image_count - 1) + m) / processed_image_count
+
+        _, cats = get_label_infos(label_file)
+        for cat in cats:
+            bins[cat-1] += 1
+        total_target_count += len(cats)
+
+        if print_info and processed_image_count % 10000 == 1:
+            print('Processed image: {} / {}'.format(processed_image_count, total_image_count))
+            print('Get targets:', total_target_count)
+
+    return processed_image_count, total_target_count, color_mean, bins
+
+
 if __name__ == '__main__':
     COCO_PATH = '/media/wx/新加卷/datasets/COCODataset'
 
