@@ -24,11 +24,16 @@ _colors = [(255, 255, 255), (255, 255, 0), (0, 255, 255), (255, 0, 255), (255, 0
            (0, 128, 255), (0, 128, 192), (0, 128, 64), (0, 64, 255), (0, 64, 192), (0, 64, 128), (0, 0, 0)]
 
 
-def draw_rectangle_with_name(image, bboxes, categories, cls_names):
+def draw_rectangle_with_name(image, bboxes, categories, cls_names, zoom=512):
     assert len(cls_names) <= len(_colors)
-
     img = np.uint8(image.copy())
-    img_h = img.shape[0]
+    img_h, img_w = img.shape[0], img.shape[1]
+    min_shape = np.minimum(img_h, img_w)
+
+    thickness = int(np.round(3 / 448 * min_shape))
+    font_thickness = int(np.round(2 / 448 * min_shape))
+    font_scale = float(1.0 / 448 * min_shape)
+
     n = len(bboxes)
 
     for i in range(n):
@@ -39,23 +44,48 @@ def draw_rectangle_with_name(image, bboxes, categories, cls_names):
         pt2 = (int(box[2]), int(box[3]))
         pt = (int(box[0]), int(box[3]))
 
-        img = cv2.rectangle(img, pt1, pt2, _colors[categ - 1], 3)
-        img = cv2.putText(img, cls, pt, cv2.FONT_HERSHEY_COMPLEX, 1.0, _colors[categ - 1], 2)
+        img = cv2.rectangle(img, pt1, pt2, _colors[categ - 1], thickness)
+        img = cv2.putText(img, cls, pt, cv2.FONT_HERSHEY_COMPLEX, font_scale, _colors[categ - 1], font_thickness)
+
+    rate = min_shape / zoom
+    if min_shape == img_h:
+        new_h = zoom
+        new_w = int(np.ceil(img_w / rate))
+    else:
+        new_w = zoom
+        new_h = int(np.ceil(img_h / rate))
+
+    img = cv2.resize(img, (new_w, new_h))
 
     return img
 
 
-def draw_rectangle(image, bboxes):
-    image = np.uint8(image)
+def draw_rectangle(image, bboxes, zoom=512):
+    img = np.uint8(image.copy())
+    img_h, img_w = img.shape[0], img.shape[1]
+    min_shape = np.minimum(img_h, img_w)
+
+    thickness = int(np.round(3 / 448 * min_shape))
+
     n = len(bboxes)
     for i in range(n):
         box = bboxes[i]
         pt1 = (int(box[0]), int(box[1]))
         pt2 = (int(box[2]), int(box[3]))
 
-        image = cv2.rectangle(image, pt1, pt2, (255, 0, 0), 2)
+        img = cv2.rectangle(img, pt1, pt2, (255, 0, 0), thickness)
 
-    return image
+    rate = min_shape / zoom
+    if min_shape == img_h:
+        new_h = zoom
+        new_w = int(np.ceil(img_w / rate))
+    else:
+        new_w = zoom
+        new_h = int(np.ceil(img_h / rate))
+
+    img = cv2.resize(img, (new_w, new_h))
+
+    return img
 
 
 # def draw_rectangle2(image, bboxes):
