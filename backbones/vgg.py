@@ -2,13 +2,14 @@ import tensorflow as tf
 from tensorflow.contrib import slim
 
 
+_num_layers = 11
 _bn_params = {'decay': 0.995, 'epsilon': 0.0001}
 _l2_weight = 0.0005
 
 # STRIDE_SIZE = 16
 
 
-def inference(inputs, is_training=True, num_layers=11, name='vgg'):
+def inference(inputs, num_layers=11, is_training=True, name='vgg'):
     assert type(num_layers) == int
     assert num_layers in [11, 13, 16, 19]
 
@@ -17,6 +18,7 @@ def inference(inputs, is_training=True, num_layers=11, name='vgg'):
         with slim.arg_scope([slim.conv2d], padding='SAME', activation_fn=tf.nn.leaky_relu,
                             normalizer_fn=slim.batch_norm, normalizer_params=_bn_params,
                             weights_regularizer=slim.l2_regularizer(_l2_weight), trainable=is_training):
+            # If input size is [224, 224, 3]
             # 224 x 224 x 3 => 112 x 112 x 64
             if num_layers == 11:
                 net = slim.conv2d(inputs, 64, [3, 3], scope=name + '_conv1')
@@ -52,7 +54,7 @@ def inference(inputs, is_training=True, num_layers=11, name='vgg'):
     return net
 
 
-def head(net, feature_dim=1000, is_training=True, num_layers=11, name='vgg'):
+def head(net, feature_dim=1024, num_layers=11, is_training=True, name='vgg'):
     assert type(num_layers) == int
     assert num_layers in [11, 13, 16, 19]
 
@@ -62,6 +64,7 @@ def head(net, feature_dim=1000, is_training=True, num_layers=11, name='vgg'):
                             weights_regularizer=slim.l2_regularizer(_l2_weight), trainable=is_training):
             with slim.arg_scope([slim.conv2d], padding='SAME',
                                 normalizer_fn=slim.batch_norm, normalizer_params=_bn_params):
+                # If input size is [14, 14, 512]
                 # 14 x 14 x 512 => 7 x 7 x 512
                 if num_layers < 16:
                     net = slim.repeat(net, 2, slim.conv2d, num_outputs=512, kernel_size=[3, 3], scope=name + '_conv5')
@@ -71,10 +74,14 @@ def head(net, feature_dim=1000, is_training=True, num_layers=11, name='vgg'):
                     net = slim.repeat(net, 4, slim.conv2d, num_outputs=512, kernel_size=[3, 3], scope=name + '_conv5')
                 net = slim.max_pool2d(net, [2, 2], scope=name + '_pool5')
 
-                net = slim.flatten(net, scope=name + '_flatten')
-                net = slim.fully_connected(net, 4096, scope=name + '_fc6')
-                net = slim.dropout(net, 0.8, is_training=is_training)
-                net = slim.fully_connected(net, 4096, scope=name + '_fc7')
-                net = slim.dropout(net, 0.8, is_training=is_training)
-                net = slim.fully_connected(net, feature_dim, activation_fn=None, scope=name + '_fc8')
+                # net = slim.flatten(net, scope=name + '_flatten')
+                # net = slim.fully_connected(net, 4096, scope=name + '_fc6')
+                # net = slim.dropout(net, 0.8, is_training=is_training)
+                # net = slim.fully_connected(net, 4096, scope=name + '_fc7')
+                # net = slim.dropout(net, 0.8, is_training=is_training)
+                # net = slim.fully_connected(net, feature_dim, activation_fn=None, scope=name + '_fc8')
+
+                # Change fully connected to 1 x 1 convolution and global average pooling.
+                net = slim.repeat(net, 2, slim.conv2d, num_outputs=feature_dim, kernel_size=[1, 1])
+        net = tf.reduce_mean(net, axis=[1, 2], name='global_average_pooling')
     return net

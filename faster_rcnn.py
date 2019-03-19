@@ -17,11 +17,11 @@ def faster_rcnn(features, rois, image_shape, is_training=True):
 
         if 'backbones' not in sys.path:
             sys.path.append('backbones')
-        cnn = import_module(frc.BACKBONE, package='backbones.')
+        cnn = import_module(frc.BACKBONE, package='backbones')
         # Fully connected
         net_flatten = cnn.head(roi_features)
 
-        with slim.arg_scope([slim.fully_connected], weights_regularizer=slim.l2_regularizer(0.0005),
+        with slim.arg_scope([slim.fully_connected], weights_regularizer=slim.l2_regularizer(frc.L2_WEIGHT),
                             weights_initializer=slim.variance_scaling_initializer(1.0, mode='FAN_AVG', uniform=True),
                             activation_fn=None, trainable=is_training):
             cls_score = slim.fully_connected(net_flatten, frc.NUM_CLS + 1, scope='cls_fc')
@@ -62,7 +62,7 @@ def process_faster_rcnn(rois, bbox_pred, scores, image_shape):
             predict_x_max = tf.maximum(0., tf.minimum(image_width - 1, predict_x_max))
             predict_y_max = tf.maximum(0., tf.minimum(image_height - 1, predict_y_max))
 
-            predict_bboxes = tf.transpose(tf.stack([predict_x_min, predict_y_min, predict_x_max, predict_y_max]))
+            predict_bboxes = tf.stack([predict_x_min, predict_y_min, predict_x_max, predict_y_max], axis=1)
 
             # NMS
             keep_ind = tf.image.non_max_suppression(predict_bboxes, score,
@@ -76,25 +76,33 @@ def process_faster_rcnn(rois, bbox_pred, scores, image_shape):
             all_cls_scores.append(per_cls_scores)
             categories.append(tf.ones_like(per_cls_scores) * i)
 
-        final_bboxes = tf.concat(all_cls_bboxex, axis=0)
-        final_scores = tf.concat(all_cls_scores, axis=0)
-        final_categories = tf.concat(categories, axis=0)
+        final_bboxes = tf.concat(all_cls_bboxex, axis=0, name='final_bboxes')
+        final_scores = tf.concat(all_cls_scores, axis=0, name='final_scores')
+        final_categories = tf.concat(categories, axis=0, name='final_categories')
 
-        return final_bboxes, final_scores, final_categories
+    return final_bboxes, final_scores, final_categories
+
+
+def build_faster_rcnn_losses(bbox_pred, bbox_targets, cls_score, labels, num_cls):
+    with tf.variable_scope('rcnn_losses'):
+        bbox_loss = smooth_l1_loss_rcnn(bbox_pred, bbox_targets, labels, num_cls)
+        cls_loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=cls_score, labels=labels))
+    return bbox_loss, cls_loss
 
 
 def roi_pooling(features, rois, image_shape):
-    img_h, img_w = tf.cast(image_shape[0], tf.float32), tf.cast(image_shape[1], tf.float32)
-    N = tf.shape(rois)[0]
+    with tf.variable_scope('roi_pooling'):
+        img_h, img_w = tf.cast(image_shape[0], tf.float32), tf.cast(image_shape[1], tf.float32)
+        N = tf.shape(rois)[0]
 
-    normalized_rois = _normalize_rois(rois, img_h, img_w)
+        normalized_rois = _normalize_rois(rois, img_h, img_w)
 
-    cropped_roi_features = tf.image.crop_and_resize(features, normalized_rois, tf.zeros((N,), tf.int32),
-                                                    crop_size=[frc.FASTER_RCNN_ROI_SIZE, frc.FASTER_RCNN_ROI_SIZE])
+        cropped_roi_features = tf.image.crop_and_resize(features, normalized_rois, tf.zeros((N,), tf.int32),
+                                                        crop_size=[frc.FASTER_RCNN_ROI_SIZE, frc.FASTER_RCNN_ROI_SIZE])
 
-    roi_features = slim.max_pool2d(cropped_roi_features,
-                                   kernel_size=[frc.FASTER_RCNN_POOL_KERNEL_SIZE, frc.FASTER_RCNN_POOL_KERNEL_SIZE],
-                                   stride=frc.FASTER_RCNN_POOL_KERNEL_SIZE)
+        roi_features = slim.max_pool2d(cropped_roi_features,
+                                       kernel_size=[frc.FASTER_RCNN_POOL_KERNEL_SIZE, frc.FASTER_RCNN_POOL_KERNEL_SIZE],
+                                       stride=frc.FASTER_RCNN_POOL_KERNEL_SIZE)
     return roi_features
 
 
@@ -106,12 +114,7 @@ def _normalize_rois(rois, img_h, img_w):
     normalized_x2 = x2 / img_w
     normalized_y2 = y2 / img_h
 
-    normalized_rois = tf.transpose(tf.stack([normalized_x1, normalized_y1, normalized_x2, normalized_y2]))
+    # normalized coordinates [y1, x1, y2, x2]
+    normalized_rois = tf.stack([normalized_y1, normalized_x1, normalized_y2, normalized_x2], axis=1)
 
     return tf.stop_gradient(normalized_rois)
-
-
-def build_faster_rcnn_losses(bbox_pred, bbox_targets, cls_score, labels, num_cls):
-    bbox_loss = smooth_l1_loss_rcnn(bbox_pred, bbox_targets, labels, num_cls)
-    cls_loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=cls_score, labels=labels))
-    return bbox_loss, cls_loss
