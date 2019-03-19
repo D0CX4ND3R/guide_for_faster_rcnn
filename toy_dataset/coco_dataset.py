@@ -116,7 +116,7 @@ def analyse_dataset(image_list, label_list, cls_names, print_info=True):
     total_image_count = len(image_list)
     processed_image_count = 0
     total_target_count = 0
-    bins = np.zeros(shape=(1, len(cls_names)), dtype=np.float32)
+    bins = np.zeros(shape=(len(cls_names), ), dtype=np.float32)
     color_mean = np.zeros(shape=(1, 3), dtype=np.float32)
     for img_file, label_file in zip(image_list, label_list):
         processed_image_count += 1
@@ -131,7 +131,7 @@ def analyse_dataset(image_list, label_list, cls_names, print_info=True):
             bins[cat-1] += 1
         total_target_count += len(cats)
 
-        if print_info and processed_image_count % 10000 == 1:
+        if print_info and processed_image_count % 1000 == 0:
             print('Processed image: {} / {}'.format(processed_image_count, total_image_count))
             print('Get targets:', total_target_count)
 
@@ -158,28 +158,32 @@ if __name__ == '__main__':
     train_file_list, train_label_list, train_image_size_list, \
     val_file_list, val_label_list, val_image_size_list, cls_names = load_translated_data(COCO_PATH)
 
-
-    def _image_batch(image_list, label_list, size_list, batch_size=1):
-        total_samples = len(image_list)
-        while True:
-            ind = random.choice(range(total_samples))
-            img = cv2.imread(image_list[ind])
-            gt_bboxes = np.array(get_gt_infos(label_list[ind]))
-            img_size = np.array(size_list[ind])
-            yield img, gt_bboxes, img_size
+    image_count, target_count, color_mean, bins = analyse_dataset(train_file_list, train_label_list, cls_names)
+    print('Target_count:', target_count)
+    print('Color mean:', color_mean)
 
 
-    cls_names = ['BG'] + cls_names
-
-    g = _image_batch(train_file_list, train_label_list, train_image_size_list)
-    total_samples = len(train_file_list)
-    while cv2.waitKey(2000) & 0xFF != ord('q'):
-        img, gt_bboxes, img_size = g.__next__()
-        img = draw_rectangle_with_name(img, gt_bboxes[:, :-1], gt_bboxes[:, -1], cls_names)
-        cv2.imshow('coco', img)
-
-        print('Image height: {} width: {}'.format(img_size[0], img_size[1]))
-    cv2.destroyAllWindows()
+    # def _image_batch(image_list, label_list, size_list, batch_size=1):
+    #     total_samples = len(image_list)
+    #     while True:
+    #         ind = random.choice(range(total_samples))
+    #         img = cv2.imread(image_list[ind])
+    #         gt_bboxes = np.array(get_gt_infos(label_list[ind]))
+    #         img_size = np.array(size_list[ind])
+    #         yield img, gt_bboxes, img_size
+    #
+    #
+    # cls_names = ['BG'] + cls_names
+    #
+    # g = _image_batch(train_file_list, train_label_list, train_image_size_list)
+    # total_samples = len(train_file_list)
+    # while cv2.waitKey(2000) & 0xFF != ord('q'):
+    #     img, gt_bboxes, img_size = g.__next__()
+    #     img = draw_rectangle_with_name(img, gt_bboxes[:, :-1], gt_bboxes[:, -1], cls_names)
+    #     cv2.imshow('coco', img)
+    #
+    #     print('Image height: {} width: {}'.format(img_size[0], img_size[1]))
+    # cv2.destroyAllWindows()
 
     # for img_file_path, label_file_path, img_size in zip(train_file_list, train_label_list, train_image_size_list):
     #     img = cv2.imread(img_file_path)

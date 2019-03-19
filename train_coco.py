@@ -107,28 +107,36 @@ def _network(inputs, image_shape, gt_bboxes, cls_names):
     return final_bbox, final_score, final_categories, loss_dict, acc_dict, image_summary
 
 
+# def _image_batch(image_list, label_list, size_list, batch_size=1):
+#     total_samples = len(image_list)
+#     while True:
+#         ind = random.choice(range(total_samples))
+#         img = io.imread(image_list[ind])
+#         img_dims = len(img.shape)
+#         if img_dims == 2:
+#             img = np.dstack([img, img, img])
+#         try:
+#             img = img[np.newaxis, :, :, :]
+#         except IndexError as err:
+#             print('Image dimention:', img_dims)
+#             print('Image ID:', image_list[ind])
+#             raise err
+#         gt_bboxes = get_gt_infos(label_list[ind])
+#         gt_bboxes = np.array(gt_bboxes, dtype=np.int32)
+#         img_size = size_list[ind]
+#         # img_size = np.array(size_list[ind], dtype=np.int32)
+#         yield img, gt_bboxes, img_size
+
+
 def _image_batch(image_list, label_list, size_list, batch_size=1):
-    total_samples = len(image_list)
-    while True:
-        ind = random.choice(range(total_samples))
-        img = io.imread(image_list[ind])
-        img_dims = len(img.shape)
-        if img_dims == 2:
-            img = np.dstack([img, img, img])
-        try:
-            img = img[np.newaxis, :, :, :]
-        except IndexError as err:
-            print('Image dimention:', img_dims)
-            print('Image ID:', image_list[ind])
-            raise err
-        gt_bboxes = get_gt_infos(label_list[ind])
-        gt_bboxes = np.array(gt_bboxes, dtype=np.int32)
-        img_size = size_list[ind]
-        # img_size = np.array(size_list[ind], dtype=np.int32)
-        yield img, gt_bboxes, img_size
+    image_queue, label_queue, size_queue = tf.train.slice_input_producer([image_list, label_list, size_list])
+    image_batch, label_batch, size_batch = tf.train.batch()
+    reader = tf.TFRecordReader()
+    reader.read()
 
 
-def _preprocess(inputs, gt_bboxes, image_size, minimum_length=1000, is_training=True):
+
+def _preprocess(inputs, gt_bboxes, image_size, minimum_length=800, is_training=True):
     height, width = tf.to_float(image_size[0]), tf.to_float(image_size[1])
     x1, y1, x2, y2, cls = tf.unstack(gt_bboxes, axis=1)
     minimum_size = tf.minimum(height, width)
@@ -175,18 +183,18 @@ def _main():
                  frc.RPN_LOCATION_LOSS_WEIGHTS * loss_dict['rpn_bbox_loss'] + \
                  frc.FASTER_RCNN_CLASSIFICATION_LOSS_WEIGHTS * loss_dict['rcnn_cls_loss'] + \
                  frc.FASTER_RCNN_LOCATION_LOSS_WEIGHTS * loss_dict['rcnn_bbox_loss'] + \
-                 tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
+                 0.0005 * tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
 
     global_step = tf.train.get_or_create_global_step()
 
     learning_rate = tf.train.piecewise_constant(global_step, frc.LEARNING_RATE_BOUNDARIES, frc.LEARNING_RATE_SCHEDULAR)
 
     # Adam
-    train_op = tf.train.AdamOptimizer(learning_rate).minimize(total_loss, global_step=global_step)
+    # train_op = tf.train.AdamOptimizer(learning_rate).minimize(total_loss, global_step=global_step)
     # train_op = tf.train.AdamOptimizer(0.003).minimize(total_loss, global_step=global_step)
 
     # Momentum
-    # train_op = tf.train.MomentumOptimizer(learning_rate, momentum=0.9).minimize(total_loss, global_step=global_step)
+    train_op = tf.train.MomentumOptimizer(learning_rate, momentum=0.9).minimize(total_loss, global_step=global_step)
 
     # RMS
     # train_op = tf.train.RMSPropOptimizer(learning_rate, momentum=0.9).minimize(total_loss, global_step=global_step)
@@ -269,8 +277,8 @@ def _main():
                 if step % frc.REFRESH_LOGS_ITERS == 0 and step != 0:
                     summary_writer.add_summary(scale_summary_str, step)
                     saver.save(sess, os.path.join(save_model_dir, frc.MODEL_NAME + '.ckpt'), step)
-                    if step % 100 == 0:
-                        summary_writer.add_summary(image_summary_str)
+                    if step % 50 == 0:
+                        summary_writer.add_summary(image_summary_str, step)
 
                 summary_writer.flush()
                 step += 1

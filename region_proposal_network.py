@@ -190,10 +190,10 @@ def process_proposal_targets_py(rpn_rois, gt_bboxes):
     # 2. Get the maximum overlap area for each roi and set it label equal to the ground truth.
 
     overlaps = get_overlaps_py(all_rois, gt_bboxes[:, :-1])
-    max_overlaps_gt_indexes = np.argmax(overlaps, axis=1)
+    max_overlaps_gt_indices = np.argmax(overlaps, axis=1)
     max_overlaps = np.max(overlaps, axis=1)
 
-    labels = gt_bboxes[max_overlaps_gt_indexes, -1]
+    labels = gt_bboxes[max_overlaps_gt_indices, -1]
 
     # 3. Set overlap iou larger than iou threshold as positive sample, and less than threshold as negative samples.
     # IOU > POSITIVE_THRESHOLD = 0.5 => POSITIVE
@@ -210,8 +210,8 @@ def process_proposal_targets_py(rpn_rois, gt_bboxes):
     # chose background indices
     bg_indices = np.where((max_overlaps < frc.FASTER_RCNN_IOU_POSITIVE_THRESHOLD) &
                           (max_overlaps >= frc.FASTER_RCNN_IOU_NEGATIVE_THRESHOLD))[0]
-    # bg_roi_per_image = rois_per_image - fg_rois_per_image
     bg_roi_per_image = fg_rois_per_image
+    # bg_roi_per_image = rois_per_image - fg_rois_per_image
     bg_roi_per_image = np.minimum(bg_roi_per_image, bg_indices.size)
 
     if bg_indices.size > 0:
@@ -225,7 +225,7 @@ def process_proposal_targets_py(rpn_rois, gt_bboxes):
     rois = np.float32(all_rois[keep_indices])
 
     # 6. Encodes bounding boxes to targets coordinates for bounding box regression.
-    bbox_targets_data = encode_bboxes(rois, gt_bboxes[max_overlaps_gt_indexes[keep_indices], :-1])
+    bbox_targets_data = encode_bboxes(rois, gt_bboxes[max_overlaps_gt_indices[keep_indices], :-1])
     # bbox_targets_data = np.hstack([labels[:, np.newaxis], bbox_targets_data]).astype(np.float32, copy=False)
 
     bbox_targets = np.zeros((labels.size, 4 * (frc.NUM_CLS + 1)), dtype=np.float32)
