@@ -21,7 +21,7 @@ def rpn(features, image_shape, gt_bboxes):
         rpn_cls_prob = slim.softmax(rpn_cls_score, scope='rpn_cls_pred')
 
         # rpn_bbox_pred
-        rpn_bbox_pred = slim.conv2d(features, frc.ANCHOR_NUM * (frc.NUM_CLS + 1), [1, 1],
+        rpn_bbox_pred = slim.conv2d(features, frc.ANCHOR_NUM * 4, [1, 1],
                                     activation_fn=None, scope='rpn_bbox_pred')
         rpn_bbox_pred = tf.reshape(rpn_bbox_pred, [-1, 4])
 
