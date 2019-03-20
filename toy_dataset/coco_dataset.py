@@ -2,6 +2,7 @@ import os
 import numpy as np
 import random
 import cv2
+import matplotlib.pyplot as plt
 from pycocotools.coco import COCO
 
 from utils.image_draw import draw_rectangle_with_name
@@ -159,9 +160,12 @@ if __name__ == '__main__':
     val_file_list, val_label_list, val_image_size_list, cls_names = load_translated_data(COCO_PATH)
 
     image_count, target_count, color_mean, bins = analyse_dataset(train_file_list, train_label_list, cls_names)
+    with open('./ret', 'w') as writer:
+        writer.write('Target_count {}\n'.format(str(target_count)))
+        for i in range(len(cls_names)):
+            writer.write('{} {}\n'.format(cls_names[i], str(bins[i])))
     print('Target_count:', target_count)
     print('Color mean:', color_mean)
-
 
     # def _image_batch(image_list, label_list, size_list, batch_size=1):
     #     total_samples = len(image_list)
