@@ -14,6 +14,10 @@ import faster_rcnn_configs as frc
 from toy_dataset.coco_dataset import get_gt_infos, load_translated_data
 
 
+LEARNING_RATE_BOUNDARIES = [1000, 2000, 8000]
+LEARNING_RATE_SCHEDULAR = [0.1, 0.01, 0.001, 0.0001]
+
+
 def _batch_generator(image_list, label_list, batch_size=128, target_shape=(224, 224)):
     total_samples = len(image_list)
     image_batch = np.zeros(shape=(batch_size, target_shape[0], target_shape[1], 3))
@@ -52,7 +56,10 @@ def _network(inputs, tf_labels):
     net = backbone.inference(inputs)
     net = backbone.head(net)
 
-    logits = slim.flatten(net, scope='flatten')
+    features = slim.flatten(net, scope='flatten')
+    logits = slim.fully_connected(features, frc.NUM_CLS, activation_fn=None,
+                                  normalizer_fn=slim.batch_norm, normalizer_params={'decay': 0.995, 'epsilon': 0.0001},
+                                  weights_regularizer=slim.l2_regularizer(frc.L2_WEIGHT), scope='fc')
     cross_entropy = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=tf_labels))
     pred = tf.cast(tf.argmax(slim.softmax(logits), axis=1), dtype=tf.int32)
     acc = tf.reduce_mean(tf.cast(tf.equal(pred, tf_labels), dtype=tf.float32))
@@ -69,16 +76,25 @@ def _main():
         tf_label = tf.placeholder(dtype=tf.int32, shape=[None], name='labels')
 
     cross_entropy, acc = _network(tf_image, tf_label)
-    total_loss = cross_entropy + 0.0005 * tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
+    reg_loss = 0.001 * tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
+    total_loss = cross_entropy + reg_loss
 
     global_step = tf.train.get_or_create_global_step()
+
+    # learning_rate = tf.train.piecewise_constant(global_step, LEARNING_RATE_BOUNDARIES, LEARNING_RATE_SCHEDULAR)
+
+    # Adam
     optimizer = tf.train.AdamOptimizer(0.003)
+
+    # Momentum
+    # optimizer = tf.train.MomentumOptimizer(learning_rate, momentum=0.9)
 
     train_op = optimizer.minimize(total_loss, global_step=global_step)
 
     with tf.name_scope('summary'):
         tf.summary.scalar('loss', total_loss)
         tf.summary.scalar('cross_entropy', cross_entropy)
+        tf.summary.scalar('reg_loss', reg_loss)
         tf.summary.scalar('accuracy', acc)
 
     summary_op = tf.summary.merge_all()
@@ -109,18 +125,19 @@ def _main():
                 step_time = time.time()
                 images, labels = batch_gen.__next__()
                 feed_in = {tf_image: images, tf_label: labels}
-                _, loss_, xent_, acc_, sry_str_, global_step_ = sess.run(
-                    [train_op, total_loss, cross_entropy, acc, summary_op, global_step], feed_dict=feed_in)
+                _, loss_, xent_, reg_loss_, acc_, sry_str_, global_step_ = sess.run(
+                    [train_op, total_loss, cross_entropy, reg_loss, acc, summary_op, global_step], feed_dict=feed_in)
 
                 if step % 10 == 0:
                     summary_writer.add_summary(sry_str_, step)
                 if step % 100 == 0:
-                    saver.save(sess, model_dir, step)
+                    saver.save(sess, os.path.join(model_dir, frc.BACKBONE + '_pretrain.ckpt'), step)
 
                 step_time = time.time() - step_time
                 print(f'Epoch: {step} |',
                       f'loss: {loss_:.3} |',
                       f'cross entropy: {xent_:.3} |',
+                      f'reg loss: {reg_loss_:.3} |',
                       f'accuracy: {acc_:.3} |',
                       f'time: {step_time:.3}')
 
