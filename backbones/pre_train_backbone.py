@@ -90,9 +90,10 @@ def _main():
     global_step = tf.train.get_or_create_global_step()
 
     # learning_rate = tf.train.piecewise_constant(global_step, LEARNING_RATE_BOUNDARIES, LEARNING_RATE_SCHEDULAR)
+    learning_rate = tf.train.exponential_decay(0.003, global_step, 1000, 0.8)
 
     # Adam
-    optimizer = tf.train.AdamOptimizer(0.003)
+    optimizer = tf.train.AdamOptimizer(learning_rate)
 
     # Momentum
     # optimizer = tf.train.MomentumOptimizer(learning_rate, momentum=0.9)
