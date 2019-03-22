@@ -35,6 +35,9 @@ def _batch_generator(image_list, label_list, batch_size=128, target_shape=(224, 
             x1, y1, x2, y2, cls = gt_bbox
             sub_img = img[y1:y2+1, x1:x2+1, :]
             sub_img = cv2.resize(sub_img, target_shape)
+            flip = random.choice([None, -1, 0, 1])
+            if flip:
+                sub_img = cv2.flip(sub_img, flip)
             image_batch[batch] = np.float32(sub_img)
             label_batch[batch] = cls - 1
             batch += 1
@@ -54,10 +57,15 @@ def _network(inputs, tf_labels):
     backbone = import_module(frc.BACKBONE)
 
     net = backbone.inference(inputs)
-    net = backbone.head(net)
+    features = slim.conv2d(net, 512, [3, 3], normalizer_fn=slim.batch_norm,
+                           normalizer_params={'decay': 0.995, 'epsilon': 0.0001},
+                           weights_regularizer=slim.l2_regularizer(frc.L2_WEIGHT),
+                           scope='rpn_feature')
+    with tf.variable_scope('rcnn'):
+        net = backbone.head(features)
 
-    features = slim.flatten(net, scope='flatten')
-    logits = slim.fully_connected(features, frc.NUM_CLS, activation_fn=None,
+    flatten_net = slim.flatten(net, scope='flatten')
+    logits = slim.fully_connected(flatten_net, frc.NUM_CLS, activation_fn=None,
                                   normalizer_fn=slim.batch_norm, normalizer_params={'decay': 0.995, 'epsilon': 0.0001},
                                   weights_regularizer=slim.l2_regularizer(frc.L2_WEIGHT), scope='fc')
     cross_entropy = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=tf_labels))
@@ -100,7 +108,12 @@ def _main():
     summary_op = tf.summary.merge_all()
 
     init_op = tf.group(tf.global_variables_initializer(), tf.local_variables_initializer())
-    saver = tf.train.Saver(max_to_keep=4)
+
+    all_variables = slim.get_model_variables()
+    saved_variables = [var for var in all_variables
+                       if var.op.name.split('/')[-1] == 'weights' and var.op.name.split('/')[0] != 'fc']
+
+    saver = tf.train.Saver(var_list=saved_variables, max_to_keep=4)
 
     batch_gen = _batch_generator(train_file_list, train_label_list)
 
@@ -121,7 +134,7 @@ def _main():
 
         step = 0
         try:
-            while step <= 10000:
+            while step <= 50000:
                 step_time = time.time()
                 images, labels = batch_gen.__next__()
                 feed_in = {tf_image: images, tf_label: labels}
