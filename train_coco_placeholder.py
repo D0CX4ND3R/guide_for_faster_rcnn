@@ -282,7 +282,8 @@ def _main():
         print('From pre-train model load {}.'.format(name), end=' ')
         print(load_variables[name])
 
-    saver = tf.train.Saver(var_list=load_variables, max_to_keep=4)
+    restore = tf.train.Saver(var_list=load_variables)
+    saver = tf.train.Saver(max_to_keep=4)
 
     if not os.path.exists(frc.SUMMARY_PATH):
         os.mkdir(frc.SUMMARY_PATH)
@@ -291,7 +292,7 @@ def _main():
         sess.run(init_op)
         if frc.PRE_TRAIN_MODEL_PATH:
             print('Load pre-trained model:', frc.PRE_TRAIN_MODEL_PATH)
-            saver.restore(sess, frc.PRE_TRAIN_MODEL_PATH)
+            restore.restore(sess, frc.PRE_TRAIN_MODEL_PATH)
 
         start_time = time.strftime('%Y_%m_%d_%H_%M_%S')
         log_dir = os.path.join(frc.SUMMARY_PATH, start_time)
