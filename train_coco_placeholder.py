@@ -8,6 +8,7 @@ import skimage.io as io
 import numpy as np
 import tensorflow as tf
 from tensorflow.contrib import slim
+from tensorflow.python import pywrap_tensorflow
 
 from toy_dataset.coco_dataset import load_translated_data, get_gt_infos
 from region_proposal_network import rpn
@@ -17,91 +18,22 @@ from utils.image_draw import draw_rectangle_with_name, draw_rectangle
 import faster_rcnn_configs as frc
 
 
-load_weight_name = ['resnet50/resnet50_conv1/conv1/weights',
-                    'resnet50/resnet50_conv2/conv2_0_1/weights',
-                    'resnet50/resnet50_conv2/conv2_0_2/weights',
-                    'resnet50/resnet50_conv2/conv2_0_3/weights',
-                    'resnet50/resnet50_conv2/conv2_branch/weights',
-                    'resnet50/resnet50_conv2/conv2_1_1/weights',
-                    'resnet50/resnet50_conv2/conv2_1_2/weights',
-                    'resnet50/resnet50_conv2/conv2_1_3/weights',
-                    'resnet50/resnet50_conv2/conv2_2_1/weights',
-                    'resnet50/resnet50_conv2/conv2_2_2/weights',
-                    'resnet50/resnet50_conv2/conv2_2_3/weights',
-                    'resnet50/resnet50_conv3/conv3_0_1/weights',
-                    'resnet50/resnet50_conv3/conv3_0_2/weights',
-                    'resnet50/resnet50_conv3/conv3_0_3/weights',
-                    'resnet50/resnet50_conv3/conv3_branch/weights',
-                    'resnet50/resnet50_conv3/conv3_1_1/weights',
-                    'resnet50/resnet50_conv3/conv3_1_2/weights',
-                    'resnet50/resnet50_conv3/conv3_1_3/weights',
-                    'resnet50/resnet50_conv3/conv3_2_1/weights',
-                    'resnet50/resnet50_conv3/conv3_2_2/weights',
-                    'resnet50/resnet50_conv3/conv3_2_3/weights',
-                    'resnet50/resnet50_conv3/conv3_3_1/weights',
-                    'resnet50/resnet50_conv3/conv3_3_2/weights',
-                    'resnet50/resnet50_conv3/conv3_3_3/weights',
-                    'resnet50/resnet50_conv4/conv4_0_1/weights',
-                    'resnet50/resnet50_conv4/conv4_0_2/weights',
-                    'resnet50/resnet50_conv4/conv4_0_3/weights',
-                    'resnet50/resnet50_conv4/conv4_branch/weights',
-                    'resnet50/resnet50_conv4/conv4_1_1/weights',
-                    'resnet50/resnet50_conv4/conv4_1_2/weights',
-                    'resnet50/resnet50_conv4/conv4_1_3/weights',
-                    'resnet50/resnet50_conv4/conv4_2_1/weights',
-                    'resnet50/resnet50_conv4/conv4_2_2/weights',
-                    'resnet50/resnet50_conv4/conv4_2_3/weights',
-                    'resnet50/resnet50_conv4/conv4_3_1/weights',
-                    'resnet50/resnet50_conv4/conv4_3_2/weights',
-                    'resnet50/resnet50_conv4/conv4_3_3/weights',
-                    'resnet50/resnet50_conv4/conv4_4_1/weights',
-                    'resnet50/resnet50_conv4/conv4_4_2/weights',
-                    'resnet50/resnet50_conv4/conv4_4_3/weights',
-                    'resnet50/resnet50_conv4/conv4_5_1/weights',
-                    'resnet50/resnet50_conv4/conv4_5_2/weights',
-                    'resnet50/resnet50_conv4/conv4_5_3/weights',
-                    'rcnn/resnet50/resnet50_conv5/conv5_0_1/weights',
-                    'rcnn/resnet50/resnet50_conv5/conv5_0_2/weights',
-                    'rcnn/resnet50/resnet50_conv5/conv5_0_3/weights',
-                    'rcnn/resnet50/resnet50_conv5/conv5_branch/weights',
-                    'rcnn/resnet50/resnet50_conv5/conv5_1_1/weights',
-                    'rcnn/resnet50/resnet50_conv5/conv5_1_2/weights',
-                    'rcnn/resnet50/resnet50_conv5/conv5_1_3/weights',
-                    'rcnn/resnet50/resnet50_conv5/conv5_2_1/weights',
-                    'rcnn/resnet50/resnet50_conv5/conv5_2_2/weights',
-                    'rcnn/resnet50/resnet50_conv5/conv5_2_3/weights'
-                    ]
-
-
 def _network(inputs, image_shape, gt_bboxes, cls_names):
     if 'backbones' not in sys.path:
         sys.path.append('backbones')
     cnn = import_module(frc.BACKBONE, package='backbones')
     # CNN
-    feature_map = cnn.inference(inputs)
+    feature_map = cnn.inference(inputs, is_training=False)
 
     features = slim.conv2d(feature_map, 512, [3, 3], normalizer_fn=slim.batch_norm,
                            normalizer_params={'decay': 0.995, 'epsilon': 0.0001},
-                           weights_regularizer=slim.l2_regularizer(frc.L2_WEIGHT),
+                           weights_regularizer=slim.l2_regularizer(frc.L2_WEIGHT), trainable=False,
                            scope='rpn_feature')
 
     # RPN
     image_shape = tf.cast(tf.reshape(image_shape, [-1]), dtype=tf.int32)
     gt_bboxes = tf.cast(tf.reshape(gt_bboxes, [-1, 5]), dtype=tf.int32)
     rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss, rois, labels, bbox_targets = rpn(features, image_shape, gt_bboxes)
-
-    # Image summary for RPN rois
-    display_img = inputs[0] + tf.constant(frc.MEAN_COLOR)
-
-    class_names = frc.CLS_NAMES + cls_names
-    display_bg_indices = tf.reshape(tf.where(tf.equal(labels, 0)), [-1])
-    display_fg_indices = tf.reshape(tf.where(tf.not_equal(labels, 0)), [-1])
-    display_bg_rois = tf.gather(rois, display_bg_indices)
-    display_fg_rois = tf.gather(rois, display_fg_indices)
-    display_bg_img = tf.py_func(draw_rectangle, [display_img, display_bg_rois], [tf.uint8])
-    display_fg_img = tf.py_func(draw_rectangle, [display_img, display_fg_rois], [tf.uint8])
-    rpn_image_bg_summary = tf.summary.image('class_rois/background', display_bg_img)
-    rpn_image_fg_summary = tf.summary.image('class_rois/foreground', display_fg_img)
 
     # RCNN
     cls_score, bbox_pred = faster_rcnn(features, rois, image_shape)
@@ -115,6 +47,20 @@ def _network(inputs, image_shape, gt_bboxes, cls_names):
     rcnn_bbox_loss, rcnn_cls_loss = build_faster_rcnn_losses(bbox_pred, bbox_targets, cls_prob, labels, frc.NUM_CLS + 1)
 
     # ------------------------------BEGIN SUMMARY--------------------------------
+    # Image summary for RPN rois
+    display_img = inputs[0] + tf.constant(frc.MEAN_COLOR)
+    class_names = frc.CLS_NAMES + cls_names
+
+    with tf.name_scope('rpn_image_summary'):
+        display_bg_indices = tf.reshape(tf.where(tf.equal(labels, 0)), [-1])
+        display_fg_indices = tf.reshape(tf.where(tf.not_equal(labels, 0)), [-1])
+        display_bg_rois = tf.gather(rois, display_bg_indices)
+        display_fg_rois = tf.gather(rois, display_fg_indices)
+        display_bg_img = tf.py_func(draw_rectangle, [display_img, display_bg_rois], [tf.uint8])
+        display_fg_img = tf.py_func(draw_rectangle, [display_img, display_fg_rois], [tf.uint8])
+        rpn_image_bg_summary = tf.summary.image('class_rois/background', display_bg_img)
+        rpn_image_fg_summary = tf.summary.image('class_rois/foreground', display_fg_img)
+
     # Add predicted bbox with confidence 0.25, 0.5, 0.75 and ground truth in image summary.
     with tf.name_scope('rcnn_image_summary'):
         display_indices_25 = tf.reshape(tf.where(tf.greater_equal(final_score, 0.25) &
@@ -167,8 +113,8 @@ def _network(inputs, image_shape, gt_bboxes, cls_names):
 
 def _image_batch(image_list, label_list, size_list, batch_size=1):
     total_samples = len(image_list)
+    ind = 0
     while True:
-        ind = random.choice(range(total_samples))
         img = io.imread(image_list[ind])
         img_dims = len(img.shape)
         if img_dims == 2:
@@ -183,6 +129,7 @@ def _image_batch(image_list, label_list, size_list, batch_size=1):
         gt_bboxes = np.array(gt_bboxes, dtype=np.int32)
         img_size = size_list[ind]
         yield img, gt_bboxes, img_size
+        ind += 1
 
 
 def _preprocess(inputs, gt_bboxes, image_size, minimum_length=800, is_training=True):
@@ -209,10 +156,17 @@ def _preprocess(inputs, gt_bboxes, image_size, minimum_length=800, is_training=T
 
 
 def _load_pre_train_model(ckpt_path):
-    load_variables = {}
-    for name in load_weight_name:
-        load_variables[name] = slim.get_variables_by_name(name)
-    return load_variables
+    reader = pywrap_tensorflow.NewCheckpointReader(ckpt_path)
+    all_variable = reader.get_variable_to_shape_map()
+    # load_vars = []
+    # for var in all_variable:
+    #     if var.startswith('fc/'):
+    #
+    #     if var.startswith(('resnet50/', 'rcnn/')) or not var.endswith(('Adam', 'Adam_1')):
+    #         load_vars.append(var)
+    all_variable = [var for var in all_variable if var.startswith(('resnet50/', 'rcnn/', 'fc/'))]
+    all_variable = [var for var in all_variable if not var.endswith(('Adam', 'Adam_1'))]
+    return all_variable
 
 
 def _main():
@@ -249,10 +203,10 @@ def _main():
 
     # Adam
     # train_op = tf.train.AdamOptimizer(learning_rate).minimize(total_loss, global_step=global_step)
-    train_op = tf.train.AdamOptimizer(0.003).minimize(total_loss, global_step=global_step)
+    train_op = tf.train.AdamOptimizer(0.001).minimize(total_loss, global_step=global_step)
 
     # Momentum
-    train_op = tf.train.MomentumOptimizer(learning_rate, momentum=0.9).minimize(total_loss, global_step=global_step)
+    # train_op = tf.train.MomentumOptimizer(learning_rate, momentum=0.9).minimize(total_loss, global_step=global_step)
 
     # RMS
     # train_op = tf.train.RMSPropOptimizer(learning_rate, momentum=0.9).minimize(total_loss, global_step=global_step)
@@ -276,6 +230,7 @@ def _main():
                                       rpn_cls_acc_summary, rcnn_cls_acc_summary])#, lr_summary])
     init_op = tf.group(tf.global_variables_initializer(), tf.local_variables_initializer())
 
+    load_weight_name = _load_pre_train_model(frc.PRE_TRAIN_MODEL_PATH)
     load_variables = {}
     for name in load_weight_name:
         load_variables[name] = slim.get_variables_by_name(name)[0]
@@ -346,35 +301,6 @@ def _main():
 
                 summary_writer.flush()
                 step += 1
-
-                # if step % frc.REFRESH_LOGS_ITERS != 0:
-                #     _, global_step_ = sess.run([train_op, global_step], feed_dict)
-                # else:
-                #     step_time = time.time()
-                #
-                #     _, total_loss_, rpn_cls_loss_, rpn_bbox_loss_, rcnn_cls_loss_, rcnn_bbox_loss_, \
-                #     rpn_cls_acc_, rcnn_cls_acc_, summary_str, global_step_ = \
-                #         sess.run([train_op, total_loss, loss_dict['rpn_cls_loss'], loss_dict['rpn_bbox_loss'],
-                #                   loss_dict['rcnn_cls_loss'], loss_dict['rcnn_bbox_loss'],
-                #                   acc_dict['rpn_cls_acc'], acc_dict['rcnn_cls_acc'], summary_op, global_step], feed_dict)
-                #
-                #     step_time = time.time() - step_time
-                #
-                #     print(f'Iter: {step}',
-                #           f'| total_loss: {total_loss_:.3}',
-                #           f'| rpn_cls_loss: {rpn_cls_loss_:.3}',
-                #           f'| rpn_bbox_loss: {rpn_bbox_loss_:.3}',
-                #           f'| rcnn_cls_loss: {rcnn_cls_loss_:.3}',
-                #           f'| rcnn_bbox_loss: {rcnn_bbox_loss_:.3}',
-                #           f'| rpn_cls_acc: {rpn_cls_acc_:.3}',
-                #           f'| rcnn_cls_acc: {rcnn_cls_acc_:.3}',
-                #           f'| time: {step_time:.3}s')
-                #
-                #     summary_writer.add_summary(summary_str, step)
-                #     summary_writer.flush()
-                #
-                #     saver.save(sess, os.path.join(save_model_dir, frc.MODEL_NAME + '.ckpt'), step)
-                #     step += 1
 
         except tf.errors.OutOfRangeError:
             print('done')

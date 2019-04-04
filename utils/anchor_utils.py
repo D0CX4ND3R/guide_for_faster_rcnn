@@ -65,6 +65,7 @@ def anchors2bboxes(anchors):
 
 
 def encode_bboxes(pred_bboxes, gt_bboxes, scale_factor=None):
+    """Encode the bounding box point coordinate as anchor coordinate refer to ground truth."""
     pred_x_centers, pred_y_centers, pred_widths, pred_heigths = bboxes2anchors(pred_bboxes)
     gt_x_centers, gt_y_centers, gt_widths, gt_heigths = bboxes2anchors(gt_bboxes)
 
