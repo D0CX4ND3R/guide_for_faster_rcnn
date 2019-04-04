@@ -14,17 +14,19 @@ import faster_rcnn_configs as frc
 from toy_dataset.coco_dataset import get_gt_infos, load_translated_data
 
 
-LEARNING_RATE_BOUNDARIES = [1000, 2000, 8000]
-LEARNING_RATE_SCHEDULAR = [0.1, 0.01, 0.001, 0.0001]
+LEARNING_RATE_BOUNDARIES = [100000, 150000]
+LEARNING_RATE_SCHEDULAR = [0.003, 0.001, 0.0005]
 
 
-def _batch_generator(image_list, label_list, batch_size=128, target_shape=(224, 224)):
+def _batch_generator(image_list, label_list, batch_size=256, target_shape=(224, 224)):
     total_samples = len(image_list)
     image_batch = np.zeros(shape=(batch_size, target_shape[0], target_shape[1], 3))
     label_batch = np.zeros(shape=(batch_size, ), dtype=np.int32)
     batch = 0
+    ind = 0
     while True:
-        ind = random.choice(range(total_samples))
+        if ind == total_samples:
+            ind = 0
         img = io.imread(image_list[ind])
         img_dims = len(img.shape)
         if img_dims == 2:
@@ -44,6 +46,7 @@ def _batch_generator(image_list, label_list, batch_size=128, target_shape=(224, 
             if batch == batch_size - 1:
                 batch = 0
                 yield image_batch, label_batch
+        ind += 1
 
 
 def _preprocess_images(inputs):
@@ -84,13 +87,13 @@ def _main():
         tf_label = tf.placeholder(dtype=tf.int32, shape=[None], name='labels')
 
     cross_entropy, acc = _network(tf_image, tf_label)
-    reg_loss = 0.001 * tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
+    reg_loss = 0.0005 * tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
     total_loss = cross_entropy + reg_loss
 
     global_step = tf.train.get_or_create_global_step()
 
-    # learning_rate = tf.train.piecewise_constant(global_step, LEARNING_RATE_BOUNDARIES, LEARNING_RATE_SCHEDULAR)
-    learning_rate = tf.train.exponential_decay(0.003, global_step, 1000, 0.8)
+    learning_rate = tf.train.piecewise_constant(global_step, LEARNING_RATE_BOUNDARIES, LEARNING_RATE_SCHEDULAR)
+    # learning_rate = tf.train.exponential_decay(0.003, global_step, 1000, 0.8)
 
     # Adam
     optimizer = tf.train.AdamOptimizer(learning_rate)
@@ -110,11 +113,11 @@ def _main():
 
     init_op = tf.group(tf.global_variables_initializer(), tf.local_variables_initializer())
 
-    all_variables = slim.get_model_variables()
-    saved_variables = [var for var in all_variables
-                       if var.op.name.split('/')[-1] == 'weights' and var.op.name.split('/')[0] != 'fc']
+    # all_variables = slim.get_model_variables()
+    # saved_variables = [var for var in all_variables
+    #                    if var.op.name.split('/')[-1] == 'weights' and var.op.name.split('/')[0] != 'fc']
 
-    saver = tf.train.Saver(var_list=saved_variables, max_to_keep=4)
+    saver = tf.train.Saver(max_to_keep=4)
 
     batch_gen = _batch_generator(train_file_list, train_label_list)
 
@@ -135,7 +138,7 @@ def _main():
 
         step = 0
         try:
-            while step <= 50000:
+            while step <= 200000:
                 step_time = time.time()
                 images, labels = batch_gen.__next__()
                 feed_in = {tf_image: images, tf_label: labels}
@@ -144,7 +147,7 @@ def _main():
 
                 if step % 10 == 0:
                     summary_writer.add_summary(sry_str_, step)
-                if step % 100 == 0:
+                if step % 1000 == 0:
                     saver.save(sess, os.path.join(model_dir, frc.BACKBONE + '_pretrain.ckpt'), step)
 
                 step_time = time.time() - step_time
