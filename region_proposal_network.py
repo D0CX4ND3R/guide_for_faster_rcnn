@@ -10,8 +10,27 @@ import faster_rcnn_configs as frc
 
 
 def rpn(features, image_shape, gt_bboxes):
+    """
+    The Region proposal Network. Return rpn losses(rpn_cls_loss, rpn_bbox_loss), classification accuracy(rpn_cls_acc)
+    and samples for training faster r-cnn roi net(rois, labels, bbox_targets).
+
+    :param features: feature map from backbone
+    :param image_shape: image shape [height, width]
+    :param gt_bboxes: ground truth bouding box [x_up_left, y_up_left, x_down_right, y_down_right, label]
+    :return: rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss, rois, labels, bbox_targets
+    """
     with tf.variable_scope('rpn'):
         # rpn_cls_score
+        # Get a binary classification results
+        # with size [batch_size, feature_map_height, feature_map_width 2 * anchor_numbers]
+        # anchor_numbers = len(anchor_scale) * len(anchor_rate) according to paper the default maybe 9 from
+        # 3 kind scales [2 ** 3, 2 ** 4, 2 ** 5]
+        # 3 kind ratio [0.5, 1.0, 2.0]
+        # This means each pixel in feature map represents a stride receptive field.
+        # For example, the CNN backbone has 2 x 2 pooling 4 times and only 1 stride 3 x 3 convolution, the
+        # stride should equal to 2 ** 4 = 16.
+        # So each pixel in feature map represents a 16 x 16 base region to generate anchor boxes.
+        # 2 * anchor_number generating anchor boxes with a confidence to judge the anchor box is foreground or background.
         rpn_cls_score = slim.conv2d(features, 2 * frc.ANCHOR_NUM, [1, 1],
                                     normalizer_fn=slim.batch_norm,
                                     normalizer_params={'decay': frc.RPN_BN_DECACY, 'epsilon': frc.RPN_BN_EPS},
@@ -21,10 +40,13 @@ def rpn(features, image_shape, gt_bboxes):
         rpn_cls_prob = slim.softmax(rpn_cls_score, scope='rpn_cls_pred')
 
         # rpn_bbox_pred
+        # This generate encoded anchor coordinates with 4 dimensions.
+        # According to the paper, the encoded coordinates are [t_x, t_y, t_w, t_h] to adjust predicted bounding box.
         rpn_bbox_pred = slim.conv2d(features, frc.ANCHOR_NUM * 4, [1, 1],
                                     activation_fn=None, scope='rpn_bbox_pred')
         rpn_bbox_pred = tf.reshape(rpn_bbox_pred, [-1, 4])
 
+        # Get the feature map size and generate anchor box according to the size in original image.
         featuremap_height, featuremap_width = tf.shape(features)[1], tf.shape(features)[2]
         featuremap_height = tf.cast(featuremap_height, dtype=tf.float32)
         featuremap_width = tf.cast(featuremap_width, dtype=tf.float32)
@@ -32,7 +54,7 @@ def rpn(features, image_shape, gt_bboxes):
         anchors = make_anchors_in_image(frc.ANCHOR_BASE_SIZE, featuremap_width, featuremap_height,
                                         feature_stride=frc.FEATURE_STRIDE)
 
-        # generate labels and bboxes to train rpn
+        # generate labels and bounding boxes to train rpn
         rpn_bbox_targets, rpn_labels = tf.py_func(generate_rpn_labels_py, [anchors, gt_bboxes, image_shape],
                                                   [tf.float32, tf.float32])
         rpn_labels = tf.to_int32(rpn_labels)
@@ -180,6 +202,7 @@ def process_proposal_targets_py(rpn_rois, gt_bboxes):
     else:
         all_rois = rpn_rois
 
+    # use OHEM(Online Hard Example Mining) set rois_per_image = INF
     rois_per_image = np.inf if frc.FASTER_RCNN_MINIBATCH_SIZE == -1 else frc.FASTER_RCNN_MINIBATCH_SIZE
 
     fg_rois_per_image = np.round(frc.FASTER_RCNN_POSITIVE_RATE * rois_per_image)
@@ -210,7 +233,8 @@ def process_proposal_targets_py(rpn_rois, gt_bboxes):
     # chose background indices
     bg_indices = np.where((max_overlaps < frc.FASTER_RCNN_IOU_POSITIVE_THRESHOLD) &
                           (max_overlaps >= frc.FASTER_RCNN_IOU_NEGATIVE_THRESHOLD))[0]
-    bg_roi_per_image = np.ceil(0.2 * fg_rois_per_image)
+    # bg_roi_per_image = fg_rois_per_image
+    bg_roi_per_image = np.ceil(0.2 * fg_rois_per_image) + 1
     # bg_roi_per_image = rois_per_image - fg_rois_per_image
     bg_roi_per_image = np.minimum(bg_roi_per_image, bg_indices.size)
 
@@ -240,7 +264,20 @@ def process_proposal_targets_py(rpn_rois, gt_bboxes):
 
 
 def generate_rpn_labels_py(all_anchors, gt_bboxes, image_shape):
+    """
+    Generate samples and labels to train RPN.
+    :param all_anchors:
+    :param gt_bboxes:
+    :param image_shape:
+    :return:
+    """
     def _unmap(data, count, indexes, fill=0):
+        """
+        Unmap a subset of item (data) back to the original set of items (of
+        size count)
+        Reference:
+        https://github.com/DetectionTeamUCAS/Faster-RCNN_Tensorflow/blob/db355dc5e22f7e4f3106038e5e621d04df64c876/libs/detection_oprations/anchor_target_layer_without_boxweight.py#L97
+        """
         if len(data.shape) == 1:
             ret = np.empty((count,), dtype=np.float32)
             ret.fill(fill)
@@ -252,6 +289,13 @@ def generate_rpn_labels_py(all_anchors, gt_bboxes, image_shape):
         return ret
 
     def _check_anchors(all_anchors, image_shape, allowed_boader=0):
+        """
+        Guarantee all anchors inner the image.
+        :param all_anchors:
+        :param image_shape:
+        :param allowed_boader:
+        :return:
+        """
         image_height, image_width = image_shape
         inside_boader_indeces = np.where(
             (all_anchors[:, 0] >= -allowed_boader) &
@@ -262,6 +306,10 @@ def generate_rpn_labels_py(all_anchors, gt_bboxes, image_shape):
         return inside_boader_indeces
 
     def _foreground_background_limit(labels):
+        """
+        Make limitation for rpn labels.
+        1 for foreground, 0 for background, -1 for not care
+        """
         fg_num = int(frc.RPN_MINIBATCH_SIZE * frc.RPN_FOREGROUND_FRACTION)
         bg_num = int(frc.RPN_MINIBATCH_SIZE - fg_num)
 
@@ -316,7 +364,7 @@ def generate_rpn_labels_py(all_anchors, gt_bboxes, image_shape):
     labels[max_overlap_indices] = 1
     labels[max_overlaps_for_each_anchor >= frc.RPN_IOU_POSITIVE_THRESHOLD] = 1
 
-    # Set foreground and background limitation
+    # Set foreground and background limitation, disable foreground and background exceeding the rpn batch size.
     labels = _foreground_background_limit(labels)
 
     bbox_targets = encode_bboxes(anchors, gt_bboxes[max_overlap_gt_indices, :])
@@ -332,7 +380,7 @@ def generate_rpn_labels_py(all_anchors, gt_bboxes, image_shape):
 
 def get_overlaps_py(pred_bboxes, gt_bboxes):
     """
-    Caluculate overlap area of predicted acnchors and ground truth. Inputs K anchors and N ground truth boxes, returns
+    Calculate overlap area of predicted acnchors and ground truth. Inputs K anchors and N ground truth boxes, returns
     K * N array of ious.
     :param pred_bboxes: Generated anchors.
     :param gt_bboxes: Ground truth bounding boxes.
@@ -340,26 +388,43 @@ def get_overlaps_py(pred_bboxes, gt_bboxes):
     """
     len_pred_bboxes = len(pred_bboxes)
     len_gt_bboxes = len(gt_bboxes)
-    pred_map_indeces = np.arange(len_pred_bboxes, dtype=np.int32)
-    pred_map_indeces = np.repeat(pred_map_indeces, (len_gt_bboxes,))
-    gt_map_indeces = np.arange(len_gt_bboxes, dtype=np.int32)
-    gt_map_indeces = np.repeat(gt_map_indeces[:, np.newaxis], (len_pred_bboxes,), axis=1).transpose().ravel()
 
-    intersection_boxes_x1 = np.maximum(gt_bboxes[gt_map_indeces, 0], pred_bboxes[pred_map_indeces, 0])
-    intersection_boxes_y1 = np.maximum(gt_bboxes[gt_map_indeces, 1], pred_bboxes[pred_map_indeces, 1])
-    intersection_boxes_x2 = np.minimum(gt_bboxes[gt_map_indeces, 2], pred_bboxes[pred_map_indeces, 2])
-    intersection_boxes_y2 = np.minimum(gt_bboxes[gt_map_indeces, 3], pred_bboxes[pred_map_indeces, 3])
+    # generate indices for calculating ious as broadcast
+    # For example, have 3 pred bboxes and 2 gt bboxes, return 3 x 2 ious.
+    # The indices as follow when calculating the ious as broadcast
+    # pred index        gt index
+    # 0                 0
+    # 0                 1
+    # 1                 0
+    # 1                 1
+    # 2                 0
+    # 2                 1
+    pred_map_indices = np.arange(len_pred_bboxes, dtype=np.int32)
+    pred_map_indices = np.repeat(pred_map_indices, (len_gt_bboxes,))
+    gt_map_indices = np.arange(len_gt_bboxes, dtype=np.int32)
+    gt_map_indices = np.repeat(gt_map_indices[:, np.newaxis], (len_pred_bboxes,), axis=1).transpose().ravel()
+
+    # Can also use np.meshgrid to realize it
+    # gt_map_indices, pred_map_indices = np.meshgrid(gt_map_indices, pred_map_indices)
+    # pred_map_indices = pred_map_indices.ravel()
+    # gt_map_indices = gt_map_indices.ravel()
+
+    # find overlaps
+    intersection_boxes_x1 = np.maximum(gt_bboxes[gt_map_indices, 0], pred_bboxes[pred_map_indices, 0])
+    intersection_boxes_y1 = np.maximum(gt_bboxes[gt_map_indices, 1], pred_bboxes[pred_map_indices, 1])
+    intersection_boxes_x2 = np.minimum(gt_bboxes[gt_map_indices, 2], pred_bboxes[pred_map_indices, 2])
+    intersection_boxes_y2 = np.minimum(gt_bboxes[gt_map_indices, 3], pred_bboxes[pred_map_indices, 3])
 
     iws = intersection_boxes_x2 - intersection_boxes_x1 + 1
     ihs = intersection_boxes_y2 - intersection_boxes_y1 + 1
 
-    less_zero_indeces = np.bitwise_or(iws < 0, ihs < 0)
-    iws[less_zero_indeces] = 0
-    ihs[less_zero_indeces] = 0
-    gt_bboxes_areas = (gt_bboxes[gt_map_indeces, 2] - gt_bboxes[gt_map_indeces, 0] + 1) * \
-                      (gt_bboxes[gt_map_indeces, 3] - gt_bboxes[gt_map_indeces, 1] + 1)
-    pred_bboxes_areas = (pred_bboxes[pred_map_indeces, 2] - pred_bboxes[pred_map_indeces, 0] + 1) * \
-                        (pred_bboxes[pred_map_indeces, 3] - pred_bboxes[pred_map_indeces, 1] + 1)
+    less_zero_indices = np.bitwise_or(iws < 0, ihs < 0)
+    iws[less_zero_indices] = 0
+    ihs[less_zero_indices] = 0
+    gt_bboxes_areas = (gt_bboxes[gt_map_indices, 2] - gt_bboxes[gt_map_indices, 0] + 1) * \
+                      (gt_bboxes[gt_map_indices, 3] - gt_bboxes[gt_map_indices, 1] + 1)
+    pred_bboxes_areas = (pred_bboxes[pred_map_indices, 2] - pred_bboxes[pred_map_indices, 0] + 1) * \
+                        (pred_bboxes[pred_map_indices, 3] - pred_bboxes[pred_map_indices, 1] + 1)
     intersection_areas = iws * ihs
     ious = intersection_areas / (gt_bboxes_areas + pred_bboxes_areas - intersection_areas)
 
