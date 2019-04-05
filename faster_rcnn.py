@@ -20,13 +20,15 @@ def faster_rcnn(features, rois, image_shape, is_training=True):
         cnn = import_module(frc.BACKBONE, package='backbones')
         # Fully connected
         net_flatten = cnn.head(roi_features, is_training=True)
-        net_fc = slim.fully_connected(net_flatten, frc.NUM_CLS, activation_fn=None,
-                                      normalizer_fn=slim.batch_norm,
-                                      normalizer_params={'decay': 0.995, 'epsilon': 0.0001},
-                                      weights_regularizer=slim.l2_regularizer(frc.L2_WEIGHT), scope='fc')
+        net_fc = slim.repeat(net_flatten, 2, slim.fully_connected, num_outputs=4096, activation_fn=tf.nn.leaky_relu,
+                             normalizer_fn=slim.batch_norm, normalizer_params={'decay': 0.995, 'epsilon': 0.0001},
+                             weights_regularizer=slim.l2_regularizer(frc.L2_WEIGHT), scope='fc')
+        # net_fc = slim.fully_connected(net_flatten, num_outputs=4096, normalizer_fn=slim.batch_norm,
+        #                               normalizer_params={'decay': 0.995, 'epsilon': 0.0001},
+        #                               weights_regularizer=slim.l2_regularizer(frc.L2_WEIGHT), scope='fc')
 
         with slim.arg_scope([slim.fully_connected], weights_regularizer=slim.l2_regularizer(frc.L2_WEIGHT),
-                            weights_initializer=slim.variance_scaling_initializer(1.0, mode='FAN_AVG', uniform=True),
+                            # weights_initializer=slim.variance_scaling_initializer(1.0, mode='FAN_AVG', uniform=True),
                             activation_fn=None, trainable=is_training):
             cls_score = slim.fully_connected(net_fc, frc.NUM_CLS + 1, scope='cls_fc')
             bbox_pred = slim.fully_connected(net_fc, 4 * (frc.NUM_CLS + 1), scope='reg_fc')

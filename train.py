@@ -98,11 +98,17 @@ def _network(inputs, image_shape, gt_bboxes):
     return final_bbox, final_score, final_categories, loss_dict, acc_dict
 
 
-def _image_batch(image_shape, batch_size=1):
-    batch_image, bboxes, labels, _ = generate_shape_image(image_shape)
-    batch_image = batch_image.reshape((batch_size, image_shape[0], image_shape[1], 3))
+def _image_batch(image_shape, batch_size=16):
+    batch_image = []
+    batch_gt = []
+    for b in range(batch_size):
+        image, bboxes, labels, _ = generate_shape_image(image_shape)
+        batch_image.append(image)
+        batch_gt.append(np.hstack([bboxes, labels[:, np.newaxis]]))
+    batch_image = np.stack(batch_image, axis=0)
+    batch_gt = np.concatenate(batch_gt)
 
-    return batch_image, np.hstack([bboxes, labels[:, np.newaxis]]), image_shape
+    return batch_image, batch_gt, image_shape
 
 
 def _preprocess(inputs, image_shape=None):
@@ -126,7 +132,7 @@ def _main():
                  frc.RPN_LOCATION_LOSS_WEIGHTS * loss_dict['rpn_bbox_loss'] + \
                  frc.FASTER_RCNN_CLASSIFICATION_LOSS_WEIGHTS * loss_dict['rcnn_cls_loss'] + \
                  frc.FASTER_RCNN_LOCATION_LOSS_WEIGHTS * loss_dict['rcnn_bbox_loss'] + \
-                 tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
+                 0.0005 * tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
 
     global_step = tf.train.get_or_create_global_step()
 
@@ -183,7 +189,8 @@ def _main():
 
         try:
             for step in range(frc.MAXIMUM_ITERS + 1):
-                images, gt_bboxes, image_shape = _image_batch(image_shape=frc.IMAGE_SHAPE)
+                images, gt_bboxes, image_shape = _image_batch(image_shape=frc.IMAGE_SHAPE,
+                                                              batch_size=frc.IMAGE_BATCH_SIZE)
                 feed_dict = {tf_images: images, tf_labels: gt_bboxes, tf_shape: image_shape}
 
                 if step % frc.REFRESH_LOGS_ITERS != 0:

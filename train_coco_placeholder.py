@@ -171,8 +171,7 @@ def _load_pre_train_model(ckpt_path):
 
 def _main():
     train_file_list, train_label_list, train_image_size_list, \
-    val_file_list, val_label_list, val_image_size_list, cls_names = load_translated_data(
-        '/media/wx/新加卷/datasets/COCODataset')
+    val_file_list, val_label_list, val_image_size_list, cls_names = load_translated_data(frc.DATASET_PATH)
 
     batch_generator = _image_batch(train_file_list, train_label_list, train_image_size_list)
 
@@ -230,14 +229,15 @@ def _main():
                                       rpn_cls_acc_summary, rcnn_cls_acc_summary])#, lr_summary])
     init_op = tf.group(tf.global_variables_initializer(), tf.local_variables_initializer())
 
-    load_weight_name = _load_pre_train_model(frc.PRE_TRAIN_MODEL_PATH)
-    load_variables = {}
-    for name in load_weight_name:
-        load_variables[name] = slim.get_variables_by_name(name)[0]
-        print('From pre-train model load {}.'.format(name), end=' ')
-        print(load_variables[name])
+    if frc.PRE_TRAIN_MODEL_PATH:
+        load_weight_name = _load_pre_train_model(frc.PRE_TRAIN_MODEL_PATH)
+        load_variables = {}
+        for name in load_weight_name:
+            load_variables[name] = slim.get_variables_by_name(name)[0]
+            print('From pre-train model load {}.'.format(name), end=' ')
+            print(load_variables[name])
 
-    restore = tf.train.Saver(var_list=load_variables)
+        restore = tf.train.Saver(var_list=load_variables)
     saver = tf.train.Saver(max_to_keep=4)
 
     if not os.path.exists(frc.SUMMARY_PATH):

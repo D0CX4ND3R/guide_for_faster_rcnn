@@ -252,6 +252,13 @@ def process_proposal_targets_py(rpn_rois, gt_bboxes):
     bbox_targets_data = encode_bboxes(rois, gt_bboxes[max_overlaps_gt_indices[keep_indices], :-1])
     # bbox_targets_data = np.hstack([labels[:, np.newaxis], bbox_targets_data]).astype(np.float32, copy=False)
 
+    # Make the bbox_targets as a sparse matrix. For example, 3 classes and 2 targets, the bbox_targets is like
+    #              ||                               bbox_targets                              ||
+    # Target class ||        Class 1        ||        Class 2        ||        Class 3        ||
+    # ========================================================================================||
+    #              || t_x | t_y | t_w | t_h || t_x | t_y | t_w | t_h || t_x | t_y | t_w | t_h ||
+    #    Class 1   ||  x  |  y  |  w  |  h  ||  0  |  0  |  0  |  0  ||  0  |  0  |  0  |  0  ||
+    #    Class 3   ||  0  |  0  |  0  |  0  ||  0  |  0  |  0  |  0  ||  x  |  y  |  w  |  h  ||
     bbox_targets = np.zeros((labels.size, 4 * (frc.NUM_CLS + 1)), dtype=np.float32)
     inds = np.where(labels > 0)[0]
     for i in inds:
