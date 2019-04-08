@@ -36,13 +36,13 @@ def _network(inputs, image_shape, gt_bboxes, cls_names):
 
     # Image summary for RPN rois
     class_names = frc.CLS_NAMES + cls_names
-    display_rois_img = inputs[0]
+    display_img = inputs[0] + frc.MEAN_COLOR
     display_bg_indices = tf.reshape(tf.where(tf.equal(labels, 0)), [-1])
     display_fg_indices = tf.reshape(tf.where(tf.not_equal(labels, 0)), [-1])
     display_bg_rois = tf.gather(rois, display_bg_indices)
     display_fg_rois = tf.gather(rois, display_fg_indices)
-    display_bg_img = tf.py_func(draw_rectangle, [display_rois_img, display_bg_rois], [tf.uint8])
-    display_fg_img = tf.py_func(draw_rectangle, [display_rois_img, display_fg_rois], [tf.uint8])
+    display_bg_img = tf.py_func(draw_rectangle, [display_img, display_bg_rois], [tf.uint8])
+    display_fg_img = tf.py_func(draw_rectangle, [display_img, display_fg_rois], [tf.uint8])
     rpn_image_bg_summary = tf.summary.image('class_rois/background', display_bg_img)
     rpn_image_fg_summary = tf.summary.image('class_rois/foreground', display_fg_img)
 
@@ -60,41 +60,42 @@ def _network(inputs, image_shape, gt_bboxes, cls_names):
     # ------------------------------BEGIN SUMMARY--------------------------------
     # Add predicted bbox with confidence 0.25, 0.5, 0.75 and ground truth in image summary.
     with tf.name_scope('rcnn_image_summary'):
-        # display_indices_25 = tf.reshape(tf.where(tf.greater_equal(final_score, 0.25) &
-        #                                          tf.less(final_score, 0.5) &
-        #                                          tf.not_equal(final_categories, 0)), [-1])
-        # display_indices_50 = tf.reshape(tf.where(tf.greater_equal(final_score, 0.5) &
-        #                                          tf.less(final_score, 0.75) &
-        #                                          tf.not_equal(final_categories, 0)), [-1])
+        display_indices_25 = tf.reshape(tf.where(tf.greater_equal(final_score, 0.25) &
+                                                 tf.less(final_score, 0.5) &
+                                                 tf.not_equal(final_categories, 0)), [-1])
+        display_indices_50 = tf.reshape(tf.where(tf.greater_equal(final_score, 0.5) &
+                                                 tf.less(final_score, 0.75) &
+                                                 tf.not_equal(final_categories, 0)), [-1])
         display_indices_75 = tf.reshape(tf.where(tf.greater_equal(final_score, 0.75) &
                                                  tf.not_equal(final_categories, 0)), [-1])
 
-        # display_bboxes_25 = tf.gather(final_bbox, display_indices_25)
-        # display_bboxes_50 = tf.gather(final_bbox, display_indices_50)
+        display_bboxes_25 = tf.gather(final_bbox, display_indices_25)
+        display_bboxes_50 = tf.gather(final_bbox, display_indices_50)
         display_bboxes_75 = tf.gather(final_bbox, display_indices_75)
-        # display_categories_25 = tf.gather(final_categories, display_indices_25)
-        # display_categories_50 = tf.gather(final_categories, display_indices_50)
+        display_categories_25 = tf.gather(final_categories, display_indices_25)
+        display_categories_50 = tf.gather(final_categories, display_indices_50)
         display_categories_75 = tf.gather(final_categories, display_indices_75)
 
-        # display_image_25 = tf.py_func(draw_rectangle_with_name,
-        #                               [inputs[0], display_bboxes_25, display_categories_25, class_names],
-        #                               [tf.uint8])
-        # display_image_50 = tf.py_func(draw_rectangle_with_name,
-        #                               [inputs[0], display_bboxes_50, display_categories_50, class_names],
-        #                               [tf.uint8])
+        display_image_25 = tf.py_func(draw_rectangle_with_name,
+                                      [display_img, display_bboxes_25, display_categories_25, class_names],
+                                      [tf.uint8])
+        display_image_50 = tf.py_func(draw_rectangle_with_name,
+                                      [display_img, display_bboxes_50, display_categories_50, class_names],
+                                      [tf.uint8])
         display_image_75 = tf.py_func(draw_rectangle_with_name,
-                                      [inputs[0], display_bboxes_75, display_categories_75, class_names],
+                                      [display_img, display_bboxes_75, display_categories_75, class_names],
                                       [tf.uint8])
         display_image_gt = tf.py_func(draw_rectangle_with_name,
-                                      [inputs[0], gt_bboxes[:, :-1], gt_bboxes[:, -1], class_names],
+                                      [display_img, gt_bboxes[:, :-1], gt_bboxes[:, -1], class_names],
                                       [tf.uint8])
 
     rcnn_gt_image_summary = tf.summary.image('detection/gt', display_image_gt)
-    # tf.summary.image('detection/25', display_image_25)
-    # tf.summary.image('detection/50', display_image_50)
+    rcnn_25_image_summary = tf.summary.image('detection/25', display_image_25)
+    rcnn_50_image_summary = tf.summary.image('detection/50', display_image_50)
     rcnn_75_image_summary = tf.summary.image('detection/75', display_image_75)
     image_summary = tf.summary.merge([rpn_image_bg_summary, rpn_image_fg_summary,
-                                           rcnn_75_image_summary, rcnn_gt_image_summary])
+                                      rcnn_25_image_summary, rcnn_50_image_summary,
+                                      rcnn_75_image_summary, rcnn_gt_image_summary])
     # -------------------------------END SUMMARY---------------------------------
 
     loss_dict = {'rpn_cls_loss': rpn_cls_loss,
@@ -107,33 +108,33 @@ def _network(inputs, image_shape, gt_bboxes, cls_names):
     return final_bbox, final_score, final_categories, loss_dict, acc_dict, image_summary
 
 
-# def _image_batch(image_list, label_list, size_list, batch_size=1):
-#     total_samples = len(image_list)
-#     while True:
-#         ind = random.choice(range(total_samples))
-#         img = io.imread(image_list[ind])
-#         img_dims = len(img.shape)
-#         if img_dims == 2:
-#             img = np.dstack([img, img, img])
-#         try:
-#             img = img[np.newaxis, :, :, :]
-#         except IndexError as err:
-#             print('Image dimention:', img_dims)
-#             print('Image ID:', image_list[ind])
-#             raise err
-#         gt_bboxes = get_gt_infos(label_list[ind])
-#         gt_bboxes = np.array(gt_bboxes, dtype=np.int32)
-#         img_size = size_list[ind]
-#         # img_size = np.array(size_list[ind], dtype=np.int32)
-#         yield img, gt_bboxes, img_size
-
-
 def _image_batch(image_list, label_list, size_list, batch_size=1):
-    image_queue, label_queue, size_queue = tf.train.slice_input_producer([image_list, label_list, size_list])
-    image_batch, label_batch, size_batch = tf.train.batch()
-    reader = tf.TFRecordReader()
-    reader.read()
+    total_samples = len(image_list)
+    while True:
+        ind = random.choice(range(total_samples))
+        img = io.imread(image_list[ind])
+        img_dims = len(img.shape)
+        if img_dims == 2:
+            img = np.dstack([img, img, img])
+        try:
+            img = img[np.newaxis, :, :, :]
+        except IndexError as err:
+            print('Image dimention:', img_dims)
+            print('Image ID:', image_list[ind])
+            raise err
+        gt_bboxes = get_gt_infos(label_list[ind])
+        gt_bboxes = np.array(gt_bboxes, dtype=np.int32)
+        img_size = size_list[ind]
+        img = img - frc.MEAN_COLOR
+        # img_size = np.array(size_list[ind], dtype=np.int32)
+        yield img, gt_bboxes, img_size
 
+#
+# def _image_batch(image_list, label_list, size_list, batch_size=1):
+#     image_queue, label_queue, size_queue = tf.train.slice_input_producer([image_list, label_list, size_list])
+#     image_batch, label_batch, size_batch = tf.train.batch()
+#     reader = tf.TFRecordReader()
+#     reader.read()
 
 
 def _preprocess(inputs, gt_bboxes, image_size, minimum_length=800, is_training=True):
@@ -159,8 +160,7 @@ def _preprocess(inputs, gt_bboxes, image_size, minimum_length=800, is_training=T
 
 def _main():
     train_file_list, train_label_list, train_image_size_list, \
-    val_file_list, val_label_list, val_image_size_list, cls_names = load_translated_data(
-        '/media/wx/新加卷/datasets/COCODataset')
+    val_file_list, val_label_list, val_image_size_list, cls_names = load_translated_data(frc.DATASET_PATH)
 
     batch_generator = _image_batch(train_file_list, train_label_list, train_image_size_list)
 
@@ -190,11 +190,11 @@ def _main():
     learning_rate = tf.train.piecewise_constant(global_step, frc.LEARNING_RATE_BOUNDARIES, frc.LEARNING_RATE_SCHEDULAR)
 
     # Adam
-    # train_op = tf.train.AdamOptimizer(learning_rate).minimize(total_loss, global_step=global_step)
+    train_op = tf.train.AdamOptimizer(learning_rate).minimize(total_loss, global_step=global_step)
     # train_op = tf.train.AdamOptimizer(0.003).minimize(total_loss, global_step=global_step)
 
     # Momentum
-    train_op = tf.train.MomentumOptimizer(learning_rate, momentum=0.9).minimize(total_loss, global_step=global_step)
+    # train_op = tf.train.MomentumOptimizer(learning_rate, momentum=0.9).minimize(total_loss, global_step=global_step)
 
     # RMS
     # train_op = tf.train.RMSPropOptimizer(learning_rate, momentum=0.9).minimize(total_loss, global_step=global_step)
@@ -277,8 +277,7 @@ def _main():
                 if step % frc.REFRESH_LOGS_ITERS == 0 and step != 0:
                     summary_writer.add_summary(scale_summary_str, step)
                     saver.save(sess, os.path.join(save_model_dir, frc.MODEL_NAME + '.ckpt'), step)
-                    if step % 50 == 0:
-                        summary_writer.add_summary(image_summary_str, step)
+                    summary_writer.add_summary(image_summary_str, step)
 
                 summary_writer.flush()
                 step += 1
