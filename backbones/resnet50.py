@@ -58,6 +58,8 @@ def inference(inputs, is_training=True, name='resnet50'):
                 else:
                     net = _conv2d_block(net, 256, 3, i, is_training=is_training)
 
+            c3 = slim.conv2d(net, 512, [1, 1], activation_fn=None, trainable=is_training, scope='channel_change')
+
         # conv4 28 x 28 x 512 => 14 x 14 x 1024
         with tf.variable_scope(name + '_conv4'):
             for i in range(6):
@@ -65,7 +67,11 @@ def inference(inputs, is_training=True, name='resnet50'):
                     net = _conv2d_block(net, 512, 4, i, projection=True, is_training=is_training)
                 else:
                     net = _conv2d_block(net, 512, 4, i, is_training=is_training)
-    return net
+
+        f_h, f_w = tf.shape(net)[1], tf.shape(net)[2]
+        net = tf.image.resize_nearest_neighbor(net, [2*f_h, 2*f_w], name='upsampling')
+
+    return c3 + net
 
 
 def head(net, is_training=True):

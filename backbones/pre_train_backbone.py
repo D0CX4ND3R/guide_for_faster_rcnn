@@ -83,7 +83,9 @@ def _main():
         '/media/wx/新加卷/datasets/COCODataset')
 
     with tf.name_scope('inputs'):
-        tf_image = tf.placeholder(dtype=tf.float32, shape=[None, None, None, 3], name='images')
+        tf_image = tf.placeholder(dtype=tf.float32,
+                                  shape=[frc.IMAGE_BATCH_SIZE, frc.IMAGE_SHAPE[0], frc.IMAGE_SHAPE[1], 3],
+                                  name='images')
         tf_label = tf.placeholder(dtype=tf.int32, shape=[None], name='labels')
 
     cross_entropy, acc = _network(tf_image, tf_label)

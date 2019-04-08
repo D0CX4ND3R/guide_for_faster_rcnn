@@ -61,7 +61,7 @@ def smooth_l1_loss_rcnn(bbox_pred, bbox_targets, label, num_classes, sigma=1.0):
     return bbox_loss
 
 
-def smooth_l1_loss_rcnn_ohem(bbox_pred, bbox_targets, cross_entropy, label, num_classes, batch_size=256, sigma=1.0):
+def smooth_l1_loss_rcnn_ohem(bbox_pred, bbox_targets, cross_entropy, label, num_classes, batch_size=128, sigma=1.0):
     outside_mask = tf.stop_gradient(tf.to_float(tf.greater(label, 0)))
 
     bbox_pred = tf.reshape(bbox_pred, [-1, num_classes, 4])

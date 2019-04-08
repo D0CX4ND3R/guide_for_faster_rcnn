@@ -10,26 +10,26 @@ from utils.losses import smooth_l1_loss_rcnn, smooth_l1_loss_rcnn_ohem
 import faster_rcnn_configs as frc
 
 
-def faster_rcnn(features, rois, image_shape, is_training=True):
+def faster_rcnn(features, rois, rois_batch_inds, image_shape, is_training):
     with tf.variable_scope('rcnn'):
         # ROI Pooling
-        roi_features = roi_pooling(features, rois, image_shape)
+        roi_features = roi_pooling(features, rois, rois_batch_inds, image_shape)
 
         if 'backbones' not in sys.path:
             sys.path.append('backbones')
         cnn = import_module(frc.BACKBONE, package='backbones')
-        # Fully connected
-        net_flatten = cnn.head(roi_features, is_training=True)
-        net_fc = slim.fully_connected(net_flatten, frc.NUM_CLS, activation_fn=None,
-                                      normalizer_fn=slim.batch_norm,
-                                      normalizer_params={'decay': 0.995, 'epsilon': 0.0001},
-                                      weights_regularizer=slim.l2_regularizer(frc.L2_WEIGHT), scope='fc')
+        # CNN head
+        net = cnn.head(roi_features, is_training=is_training)
+        # net_fc = slim.fully_connected(net_flatten, 4096, activation_fn=None,
+        #                               normalizer_fn=slim.batch_norm,
+        #                               normalizer_params={'decay': 0.995, 'epsilon': 0.0001},
+        #                               weights_regularizer=slim.l2_regularizer(frc.L2_WEIGHT), scope='fc')
 
         with slim.arg_scope([slim.fully_connected], weights_regularizer=slim.l2_regularizer(frc.L2_WEIGHT),
                             weights_initializer=slim.variance_scaling_initializer(1.0, mode='FAN_AVG', uniform=True),
                             activation_fn=None, trainable=is_training):
-            cls_score = slim.fully_connected(net_fc, frc.NUM_CLS + 1, scope='cls_fc')
-            bbox_pred = slim.fully_connected(net_fc, 4 * (frc.NUM_CLS + 1), scope='reg_fc')
+            cls_score = slim.fully_connected(net, frc.NUM_CLS + 1, trainable=is_training, scope='cls_fc')
+            bbox_pred = slim.fully_connected(net, 4 * (frc.NUM_CLS + 1), trainable=is_training, scope='reg_fc')
 
             cls_score = tf.reshape(cls_score, [-1, frc.NUM_CLS + 1])
             bbox_pred = tf.reshape(bbox_pred, [-1, 4 * (frc.NUM_CLS + 1)])
@@ -100,14 +100,14 @@ def build_faster_rcnn_losses(bbox_pred, bbox_targets, cls_score, labels, num_cls
     return bbox_loss, cls_loss
 
 
-def roi_pooling(features, rois, image_shape):
+def roi_pooling(features, rois, rois_batch_inds, image_shape):
     with tf.variable_scope('roi_pooling'):
         img_h, img_w = tf.cast(image_shape[0], tf.float32), tf.cast(image_shape[1], tf.float32)
         N = tf.shape(rois)[0]
 
         normalized_rois = _normalize_rois(rois, img_h, img_w)
 
-        cropped_roi_features = tf.image.crop_and_resize(features, normalized_rois, tf.zeros((N,), tf.int32),
+        cropped_roi_features = tf.image.crop_and_resize(features, normalized_rois, rois_batch_inds,
                                                         crop_size=[frc.FASTER_RCNN_ROI_SIZE, frc.FASTER_RCNN_ROI_SIZE])
 
         roi_features = slim.max_pool2d(cropped_roi_features,

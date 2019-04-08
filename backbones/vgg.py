@@ -9,7 +9,7 @@ _l2_weight = 0.0005
 # STRIDE_SIZE = 16
 
 
-def inference(inputs, num_layers=16, is_training=True, name='vgg'):
+def inference(inputs, num_layers=11, is_training=True, name='vgg'):
     assert type(num_layers) == int
     assert num_layers in [11, 13, 16, 19]
 
@@ -54,7 +54,7 @@ def inference(inputs, num_layers=16, is_training=True, name='vgg'):
     return net
 
 
-def head(net, feature_dim=1024, num_layers=16, is_training=True, name='vgg'):
+def head(net, feature_dim=1024, num_layers=11, is_training=True, name='vgg'):
     assert type(num_layers) == int
     assert num_layers in [11, 13, 16, 19]
 
@@ -83,5 +83,7 @@ def head(net, feature_dim=1024, num_layers=16, is_training=True, name='vgg'):
 
                 # Change fully connected to 1 x 1 convolution and global average pooling.
                 net = slim.repeat(net, 2, slim.conv2d, num_outputs=feature_dim, kernel_size=[1, 1])
-        net = tf.reduce_mean(net, axis=[1, 2], name='global_average_pooling')
+            net = tf.reduce_mean(net, axis=[1, 2], name='global_average_pooling')
+            net_flatten = slim.flatten(net, scope=name + '_flatten')
+            net = slim.fully_connected(net_flatten, feature_dim, scope=name + '_fc6')
     return net

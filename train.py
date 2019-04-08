@@ -15,94 +15,126 @@ from utils.image_draw import draw_rectangle_with_name, draw_rectangle
 import faster_rcnn_configs as frc
 
 
-def _network(inputs, image_shape, gt_bboxes):
+def _network(inputs, image_shape, gt_bboxes, mode='train'):
+    if mode == 'train':
+        is_training = True
+    elif mode == 'test':
+        is_training = False
+    else:
+        raise ValueError('Wrong value for mode, expect "train" or "test", the current is "{}".'.format(mode))
+
     if 'backbones' not in sys.path:
         sys.path.append('backbones')
     cnn = import_module(frc.BACKBONE, package='backbones')
     # CNN
-    feature_map = cnn.inference(inputs)
+    feature_map = cnn.inference(inputs, is_training=is_training)
 
     features = slim.conv2d(feature_map, 512, [3, 3], normalizer_fn=slim.batch_norm,
                            normalizer_params={'decay': 0.995, 'epsilon': 0.0001},
-                           weights_regularizer=slim.l2_regularizer(frc.L2_WEIGHT),
+                           weights_regularizer=slim.l2_regularizer(frc.L2_WEIGHT), trainable=is_training,
                            scope='rpn_feature')
 
     # RPN
-    rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss, rois, labels, bbox_targets = rpn(features, image_shape, gt_bboxes)
-
-    # Image summary for RPN rois
-    class_names = frc.CLS_NAMES + ['circle', 'rectangle', 'triangle']
-    display_rois_img = tf.reshape(inputs, shape=[frc.IMAGE_SHAPE[0], frc.IMAGE_SHAPE[1], 3])
-    for i in range(frc.NUM_CLS + 1):
-        display_indices = tf.reshape(tf.where(tf.equal(labels, i)), [-1])
-        display_rois = tf.gather(rois, display_indices)
-        display_img = tf.py_func(draw_rectangle, [display_rois_img, display_rois], [tf.uint8])
-        tf.summary.image('class_rois/{}'.format(class_names[i]), display_img)
+    if is_training:
+        rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss, rois, rois_batch_inds, labels, bbox_targets = \
+            rpn(features, image_shape, gt_bboxes, is_training)
+    else:
+        rois, rois_batch_inds, labels, bbox_targets = rpn(features, image_shape, gt_bboxes, is_training)
 
     # RCNN
-    cls_score, bbox_pred = faster_rcnn(features, rois, image_shape)
+    cls_score, bbox_pred = faster_rcnn(features, rois, rois_batch_inds, image_shape, is_training)
 
     cls_prob = slim.softmax(cls_score)
-    cls_categories = tf.cast(tf.argmax(cls_prob, axis=1), dtype=tf.int32)
-    rcnn_cls_acc = tf.reduce_mean(tf.cast(tf.equal(cls_categories, tf.cast(labels, tf.int32)), tf.float32))
 
     final_bbox, final_score, final_categories = process_faster_rcnn(rois, bbox_pred, cls_prob, image_shape)
 
     rcnn_bbox_loss, rcnn_cls_loss = build_faster_rcnn_losses(bbox_pred, bbox_targets, cls_prob, labels, frc.NUM_CLS + 1)
 
-    # ------------------------------BEGIN SUMMARY--------------------------------
-    # Add predicted bbox with confidence 0.25, 0.5, 0.75 and ground truth in image summary.
-    with tf.name_scope('rcnn_image_summary'):
-        display_indices_25 = tf.reshape(tf.where(tf.greater_equal(final_score, 0.25) &
-                                                 tf.less(final_score, 0.5) &
-                                                 tf.not_equal(final_categories, 0)), [-1])
-        display_indices_50 = tf.reshape(tf.where(tf.greater_equal(final_score, 0.5) &
-                                                 tf.less(final_score, 0.75) &
-                                                 tf.not_equal(final_categories, 0)), [-1])
-        display_indices_75 = tf.reshape(tf.where(tf.greater_equal(final_score, 0.75) &
-                                                 tf.not_equal(final_categories, 0)), [-1])
+    if is_training:
+        cls_categories = tf.cast(tf.argmax(cls_prob, axis=1), dtype=tf.int32)
+        rcnn_cls_acc = tf.reduce_mean(tf.cast(tf.equal(cls_categories, tf.cast(labels, tf.int32)), tf.float32))
 
-        display_bboxes_25 = tf.gather(final_bbox, display_indices_25)
-        display_bboxes_50 = tf.gather(final_bbox, display_indices_50)
-        display_bboxes_75 = tf.gather(final_bbox, display_indices_75)
-        display_categories_25 = tf.gather(final_categories, display_indices_25)
-        display_categories_50 = tf.gather(final_categories, display_indices_50)
-        display_categories_75 = tf.gather(final_categories, display_indices_75)
+        loss_dict = {'rpn_cls_loss': rpn_cls_loss,
+                     'rpn_bbox_loss': rpn_bbox_loss,
+                     'rcnn_cls_loss': rcnn_cls_loss,
+                     'rcnn_bbox_loss': rcnn_bbox_loss}
+        acc_dict = {'rpn_cls_acc': rpn_cls_acc,
+                    'rcnn_cls_acc': rcnn_cls_acc}
 
-        display_image_25 = tf.py_func(draw_rectangle_with_name,
-                                      [inputs[0], display_bboxes_25, display_categories_25, class_names],
-                                      [tf.uint8])
-        display_image_50 = tf.py_func(draw_rectangle_with_name,
-                                      [inputs[0], display_bboxes_50, display_categories_50, class_names],
-                                      [tf.uint8])
-        display_image_75 = tf.py_func(draw_rectangle_with_name,
-                                      [inputs[0], display_bboxes_75, display_categories_75, class_names],
-                                      [tf.uint8])
-        display_image_gt = tf.py_func(draw_rectangle_with_name,
-                                      [inputs[0], gt_bboxes[:, :-1], gt_bboxes[:, -1], class_names],
-                                      [tf.uint8])
+        # ------------------------------BEGIN SUMMARY--------------------------------
+        # Image summary for RPN rois
+        with tf.name_scope('rpn_image_summary'):
+            class_names = frc.CLS_NAMES + ['circle', 'rectangle', 'triangle']
+            display_img = tf.reshape(inputs[0], shape=[frc.IMAGE_SHAPE[0], frc.IMAGE_SHAPE[1], 3])
 
-    tf.summary.image('detection/gt', display_image_gt)
-    tf.summary.image('detection/25', display_image_25)
-    tf.summary.image('detection/50', display_image_50)
-    tf.summary.image('detection/75', display_image_75)
-    # -------------------------------END SUMMARY---------------------------------
+            display_BG_indices = tf.reshape(tf.where(tf.equal(labels, 0) & tf.equal(rois_batch_inds, 0)), [-1])
+            display_BG_rois = tf.gather(rois, display_BG_indices)
 
-    loss_dict = {'rpn_cls_loss': rpn_cls_loss,
-                 'rpn_bbox_loss': rpn_bbox_loss,
-                 'rcnn_cls_loss': rcnn_cls_loss,
-                 'rcnn_bbox_loss': rcnn_bbox_loss}
-    acc_dict = {'rpn_cls_acc': rpn_cls_acc,
-                'rcnn_cls_acc': rcnn_cls_acc}
+            display_FG_indices = tf.reshape(tf.where(tf.not_equal(labels, 0) & tf.equal(rois_batch_inds, 0)), [-1])
+            display_FG_rois = tf.gather(rois, display_FG_indices)
 
-    return final_bbox, final_score, final_categories, loss_dict, acc_dict
+            display_BG_img = tf.py_func(draw_rectangle, [display_img, display_BG_rois], [tf.uint8])
+            display_FG_img = tf.py_func(draw_rectangle, [display_img, display_FG_rois], [tf.uint8])
+            tf.summary.image('class_rois/BG', display_BG_img)
+            tf.summary.image('class_rois/FG', display_FG_img)
+
+        # Add predicted bbox with confidence 0.25, 0.5, 0.75 and ground truth in image summary.
+        # with tf.name_scope('rcnn_image_summary'):
+        #     display_indices_25 = tf.reshape(tf.where(tf.greater_equal(final_score, 0.25) &
+        #                                              tf.less(final_score, 0.5) &
+        #                                              tf.not_equal(final_categories, 0) &
+        #                                              tf.equal(rois_batch_inds, 0)), [-1])
+        #     display_indices_50 = tf.reshape(tf.where(tf.greater_equal(final_score, 0.5) &
+        #                                              tf.less(final_score, 0.75) &
+        #                                              tf.not_equal(final_categories, 0) &
+        #                                              tf.equal(rois_batch_inds, 0)), [-1])
+        #     display_indices_75 = tf.reshape(tf.where(tf.greater_equal(final_score, 0.75) &
+        #                                              tf.not_equal(final_categories, 0) &
+        #                                              tf.equal(rois_batch_inds, 0)), [-1])
+        #
+        #     display_bboxes_25 = tf.gather(final_bbox, display_indices_25)
+        #     display_bboxes_50 = tf.gather(final_bbox, display_indices_50)
+        #     display_bboxes_75 = tf.gather(final_bbox, display_indices_75)
+        #     display_categories_25 = tf.gather(final_categories, display_indices_25)
+        #     display_categories_50 = tf.gather(final_categories, display_indices_50)
+        #     display_categories_75 = tf.gather(final_categories, display_indices_75)
+        #
+        #     display_image_25 = tf.py_func(draw_rectangle_with_name,
+        #                                   [display_img, display_bboxes_25, display_categories_25, class_names],
+        #                                   [tf.uint8])
+        #     display_image_50 = tf.py_func(draw_rectangle_with_name,
+        #                                   [display_img, display_bboxes_50, display_categories_50, class_names],
+        #                                   [tf.uint8])
+        #     display_image_75 = tf.py_func(draw_rectangle_with_name,
+        #                                   [display_img, display_bboxes_75, display_categories_75, class_names],
+        #                                   [tf.uint8])
+        #     # display_image_gt = tf.py_func(draw_rectangle_with_name,
+        #     #                               [display_img, gt_bboxes[:, :-1], gt_bboxes[:, -1], class_names],
+        #     #                               [tf.uint8])
+        #
+        # # tf.summary.image('detection/gt', display_image_gt)
+        # tf.summary.image('detection/25', display_image_25)
+        # tf.summary.image('detection/50', display_image_50)
+        # tf.summary.image('detection/75', display_image_75)
+        # -------------------------------END SUMMARY---------------------------------
+
+        return final_bbox, final_score, final_categories, loss_dict, acc_dict
+    else:
+        return final_bbox, final_score, final_categories
 
 
 def _image_batch(image_shape, batch_size=1):
-    batch_image, bboxes, labels, _ = generate_shape_image(image_shape)
-    batch_image = batch_image.reshape((batch_size, image_shape[0], image_shape[1], 3))
+    batch_image = []
+    batch_gt = []
+    for i in range(batch_size):
+        image, bboxes, labels, _ = generate_shape_image(image_shape)
+        gt = np.hstack([bboxes, labels[:, np.newaxis]])
+        batch_image.append(image[np.newaxis])
+        batch_gt.append(gt)
+    batch_image = np.vstack(batch_image)
+    batch_gt = np.vstack(batch_gt)
 
-    return batch_image, np.hstack([bboxes, labels[:, np.newaxis]]), image_shape
+    return batch_image, batch_gt, image_shape
 
 
 def _preprocess(inputs, image_shape=None):
@@ -126,7 +158,7 @@ def _main():
                  frc.RPN_LOCATION_LOSS_WEIGHTS * loss_dict['rpn_bbox_loss'] + \
                  frc.FASTER_RCNN_CLASSIFICATION_LOSS_WEIGHTS * loss_dict['rcnn_cls_loss'] + \
                  frc.FASTER_RCNN_LOCATION_LOSS_WEIGHTS * loss_dict['rcnn_bbox_loss'] + \
-                 tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
+                 frc.RPN_WEIGHTS_L2_PENALITY_FACTOR * tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
 
     global_step = tf.train.get_or_create_global_step()
 
@@ -183,7 +215,7 @@ def _main():
 
         try:
             for step in range(frc.MAXIMUM_ITERS + 1):
-                images, gt_bboxes, image_shape = _image_batch(image_shape=frc.IMAGE_SHAPE)
+                images, gt_bboxes, image_shape = _image_batch(image_shape=frc.IMAGE_SHAPE, batch_size=frc.IMAGE_BATCH_SIZE)
                 feed_dict = {tf_images: images, tf_labels: gt_bboxes, tf_shape: image_shape}
 
                 if step % frc.REFRESH_LOGS_ITERS != 0:
