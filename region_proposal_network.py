@@ -62,20 +62,10 @@ def rpn(features, batch_image_shape, batch_gt_bboxes, gt_batch_indices, is_train
         rpn_labels = tf.reshape(rpn_labels, [-1])
         rpn_bbox_targets = tf.reshape(rpn_bbox_targets, [-1, 4])
 
-        # all_batch_anchors = tf.reshape(tf.concat([image_anchors] * frc.IMAGE_BATCH_SIZE, axis=0), [-1, 4])
-        # # batch_ind = tf.reshape(tf.range(frc.IMAGE_BATCH_SIZE, dtype=tf.int32), [-1, 1])
-        # # batch_ind = tf.tile(batch_ind, [1, frc.ANCHOR_NUM * tf.to_int32(feature_width) * tf.to_int32(feature_height)])
-        # _, batch_indices = tf.meshgrid(
-        #     tf.range(frc.ANCHOR_NUM * tf.to_int32(featuremap_width) * tf.to_int32(featuremap_height)),
-        #     tf.range(frc.IMAGE_BATCH_SIZE))
-        # batch_indices = tf.reshape(tf.to_int32(batch_indices), [-1])
-
-        total_anchors_per_image = frc.ANCHOR_NUM * tf.to_int32(featuremap_height) * tf.to_int32(featuremap_width)
-
         # Get RCNN rois
-        with tf.control_dependencies([rpn_labels]):
+        with tf.control_dependencies([rpn_labels, rpn_bbox_targets]):
             # process rpn proposals, including clip, decode, nms
-            rois, roi_scores, rois_batch_indices = process_rpn_proposals(image_anchors, total_anchors_per_image,
+            rois, roi_scores, rois_batch_indices = process_rpn_proposals(image_anchors,
                                                                          rpn_cls_prob, rpn_bbox_pred, batch_image_shape)
             rois, rois_batch_indices, labels, bbox_targets = tf.py_func(process_proposal_targets_py,
                                                                         [rois, rois_batch_indices, batch_gt_bboxes, gt_batch_indices],
@@ -86,15 +76,15 @@ def rpn(features, batch_image_shape, batch_gt_bboxes, gt_batch_indices, is_train
             labels = tf.reshape(tf.to_int32(labels), [-1])
             bbox_targets = tf.reshape(bbox_targets, [-1, 4 * (frc.NUM_CLS + 1)])
 
-    if is_training:
-        # rpn_losses
-        rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss = build_rpn_losses(rpn_cls_score, rpn_cls_prob,
-                                                                    rpn_bbox_pred, rpn_bbox_targets,
-                                                                    rpn_labels)
+            if is_training:
+                # rpn_losses
+                rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss = build_rpn_losses(rpn_cls_score, rpn_cls_prob,
+                                                                            rpn_bbox_pred, rpn_bbox_targets,
+                                                                            rpn_labels)
 
-        return rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss, rois, rois_batch_indices, labels, bbox_targets
-    else:
-        return rois, rois_batch_indices, labels, bboxe_targets
+                return rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss, rois, rois_batch_indices, labels, bbox_targets
+            else:
+                return rois, rois_batch_indices, labels, bboxe_targets
 
 
 def build_rpn_losses(rpn_cls_score, rpn_cls_prob, rpn_bbox_pred, rpn_bbox_targets, rpn_labels):
@@ -107,6 +97,11 @@ def build_rpn_losses(rpn_cls_score, rpn_cls_prob, rpn_bbox_pred, rpn_bbox_target
     :param rpn_labels:
     :return: rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss
     """
+    print(rpn_cls_score)
+    print(rpn_cls_prob)
+    print(rpn_bbox_pred)
+    print(rpn_bbox_targets)
+    print(rpn_labels)
     with tf.variable_scope('rpn_losses'):
         # calculate class accuracy
         rpn_cls_category = tf.argmax(rpn_cls_prob, axis=1)  # get 0 or 1 to represent the background or foreground
@@ -130,13 +125,14 @@ def build_rpn_losses(rpn_cls_score, rpn_cls_prob, rpn_bbox_pred, rpn_bbox_target
     return rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss
 
 
-def process_rpn_proposals(image_anchors, total_anchors_per_image, rpn_cls_pred, rpn_bbox_pred, image_shape, scale_factor=None):
+def process_rpn_proposals(image_anchors, rpn_cls_pred, rpn_bbox_pred, image_shape, scale_factor=None):
+    slice_count = tf.shape(image_anchors)[0]
     rois = []
     rois_score = []
     rois_batch_indices = []
     for ind_in_batch in range(frc.IMAGE_BATCH_SIZE):
-        image_rpn_bbox_pred = rpn_bbox_pred[total_anchors_per_image * ind_in_batch:total_anchors_per_image * (ind_in_batch+1),:]
-        image_rpn_cls_pred = rpn_cls_pred[total_anchors_per_image * ind_in_batch:total_anchors_per_image * (ind_in_batch+1)]
+        image_rpn_bbox_pred = rpn_bbox_pred[slice_count * ind_in_batch:slice_count * (ind_in_batch+1), :]
+        image_rpn_cls_pred = rpn_cls_pred[slice_count * ind_in_batch:slice_count * (ind_in_batch+1), :]
         # 1. Trans bboxes
         t_x, t_y, t_w, t_h = tf.unstack(image_rpn_bbox_pred, axis=1)
 
@@ -195,11 +191,15 @@ def process_rpn_proposals(image_anchors, total_anchors_per_image, rpn_cls_pred, 
 
         rois.append(selected_bboxes)
         rois_score.append(selected_scores)
-        rois_batch_indices.append(ind_in_batch * tf.ones(tf.shape(selected_bboxes_indeces), dtype=tf.int32))
+        rois_batch_indices.append(ind_in_batch * tf.ones(tf.shape(selected_bboxes_indeces)[0], dtype=tf.int32))
 
     rois = tf.concat(rois, axis=0)
     rois_score = tf.concat(rois_score, axis=0)
     rois_batch_indices = tf.concat(rois_batch_indices, axis=0)
+
+    # print(rois)
+    # print(rois_score)
+    # print(rois_batch_indices)
     return rois, rois_score, rois_batch_indices
 
 
@@ -468,6 +468,10 @@ def generate_rpn_labels_py(image_anchors, batch_gt_bboxes, gt_batch_indices, bat
 
     batch_bbox_targets = batch_bbox_targets.reshape([-1, 4])
     batch_labels = batch_labels.reshape([-1, 1])
+    # print(batch_labels.shape)
+    # print(batch_bbox_targets.shape)
+    assert batch_bbox_targets.shape[0] == batch_labels.shape[0] == \
+           frc.IMAGE_BATCH_SIZE * frc.ANCHOR_NUM * frc.IMAGE_SHAPE[0] * frc.IMAGE_SHAPE[1] / (frc.FEATURE_STRIDE * frc.FEATURE_STRIDE)
 
     return batch_bbox_targets, batch_labels
 

@@ -23,11 +23,11 @@ def _network(inputs, image_shape, gt_bboxes, cls_names):
         sys.path.append('backbones')
     cnn = import_module(frc.BACKBONE, package='backbones')
     # CNN
-    feature_map = cnn.inference(inputs, is_training=False)
+    feature_map = cnn.inference(inputs, is_training=True)
 
     features = slim.conv2d(feature_map, 512, [3, 3], normalizer_fn=slim.batch_norm,
                            normalizer_params={'decay': 0.995, 'epsilon': 0.0001},
-                           weights_regularizer=slim.l2_regularizer(frc.L2_WEIGHT), trainable=False,
+                           weights_regularizer=slim.l2_regularizer(frc.L2_WEIGHT), trainable=True,
                            scope='rpn_feature')
 
     # RPN
@@ -115,6 +115,8 @@ def _image_batch(image_list, label_list, size_list, batch_size=1):
     total_samples = len(image_list)
     ind = 0
     while True:
+        if ind == total_samples - 1:
+            ind = 0
         img = io.imread(image_list[ind])
         img_dims = len(img.shape)
         if img_dims == 2:
