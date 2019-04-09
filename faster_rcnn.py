@@ -59,7 +59,7 @@ def process_faster_rcnn(rois, bbox_pred, scores, image_shape):
 
             # clip bounding to image shape
             predict_x_min, predict_y_min, predict_x_max, predict_y_max = tf.unstack(decoded_bbox, axis=1)
-            image_height, image_width = tf.to_float(image_shape[0]), tf.to_float(image_shape[1])
+            image_height, image_width = tf.to_float(frc.IMAGE_SHAPE[0]), tf.to_float(frc.IMAGE_SHAPE[1])
             predict_x_min = tf.maximum(0., tf.minimum(image_width - 1, predict_x_min))
             predict_y_min = tf.maximum(0., tf.minimum(image_height - 1, predict_y_min))
 
@@ -102,10 +102,9 @@ def build_faster_rcnn_losses(bbox_pred, bbox_targets, cls_score, labels, num_cls
 
 def roi_pooling(features, rois, rois_batch_inds, image_shape):
     with tf.variable_scope('roi_pooling'):
-        img_h, img_w = tf.cast(image_shape[0], tf.float32), tf.cast(image_shape[1], tf.float32)
-        N = tf.shape(rois)[0]
+        # img_h, img_w = tf.cast(image_shape[0], tf.float32), tf.cast(image_shape[1], tf.float32)
 
-        normalized_rois = _normalize_rois(rois, img_h, img_w)
+        normalized_rois = _normalize_rois(rois, frc.IMAGE_SHAPE[0], frc.IMAGE_SHAPE[1])
 
         cropped_roi_features = tf.image.crop_and_resize(features, normalized_rois, rois_batch_inds,
                                                         crop_size=[frc.FASTER_RCNN_ROI_SIZE, frc.FASTER_RCNN_ROI_SIZE])
