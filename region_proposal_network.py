@@ -126,6 +126,12 @@ def build_rpn_losses(rpn_cls_score, rpn_cls_prob, rpn_bbox_pred, rpn_bbox_target
 
 
 def process_rpn_proposals(image_anchors, rpn_cls_pred, rpn_bbox_pred, image_shape, scale_factor=None):
+    anchors_x_min, anchors_y_min, anchors_x_max, anchors_y_max = tf.unstack(image_anchors, axis=1)
+    anchors_width = anchors_x_max - anchors_x_min
+    anchors_height = anchors_y_max - anchors_y_min
+    anchors_center_x = anchors_x_min + anchors_width / 2.0
+    anchors_center_y = anchors_y_min + anchors_height / 2.0
+
     slice_count = tf.shape(image_anchors)[0]
     rois = []
     rois_score = []
@@ -141,12 +147,6 @@ def process_rpn_proposals(image_anchors, rpn_cls_pred, rpn_bbox_pred, image_shap
             t_y /= scale_factor[1]
             t_w /= scale_factor[2]
             t_h /= scale_factor[3]
-
-        anchors_x_min, anchors_y_min, anchors_x_max, anchors_y_max = tf.unstack(image_anchors, axis=1)
-        anchors_width = anchors_x_max - anchors_x_min
-        anchors_height = anchors_y_max - anchors_y_min
-        anchors_center_x = anchors_x_min + anchors_width / 2.0
-        anchors_center_y = anchors_y_min + anchors_height / 2.0
 
         # According to equations in Faster-RCNN
         # t_x = (x - x_a) / w_a
@@ -214,13 +214,7 @@ def make_anchors_in_image(anchor_base, feature_width, feature_height, feature_st
                        tf.reshape(shift_x, [-1]), tf.reshape(shift_y, [-1])],
                       axis=1)
     all_anchors = tf.reshape(_anchors[tf.newaxis, :, :] + shifts[:, tf.newaxis, :], [-1, 4])
-    # all_anchors_batch = tf.reshape(tf.concat([all_anchors] * frc.IMAGE_BATCH_SIZE, axis=0), [-1, 4])
-    #
-    # # batch_ind = tf.reshape(tf.range(frc.IMAGE_BATCH_SIZE, dtype=tf.int32), [-1, 1])
-    # # batch_ind = tf.tile(batch_ind, [1, frc.ANCHOR_NUM * tf.to_int32(feature_width) * tf.to_int32(feature_height)])
-    # _, batch_ind = tf.meshgrid(tf.range(frc.ANCHOR_NUM * tf.to_int32(feature_width) * tf.to_int32(feature_height)),
-    #                            tf.range(frc.IMAGE_BATCH_SIZE))
-    # batch_ind = tf.reshape(batch_ind, [-1])
+
     return all_anchors
 
 
@@ -306,7 +300,8 @@ def process_proposal_targets_py(rpn_rois, batch_rois_indices, batch_gt_bboxes, b
         all_rois_image_ind_in_batch = batch_rois_indices
 
     # use OHEM(Online Hard Example Mining) set rois_per_image = INF
-    rois_per_image = np.inf if frc.FASTER_RCNN_MINIBATCH_SIZE == -1 else frc.FASTER_RCNN_MINIBATCH_SIZE
+    rois_per_image = np.inf if frc.FASTER_RCNN_MINIBATCH_SIZE == -1 \
+        else frc.FASTER_RCNN_MINIBATCH_SIZE // frc.IMAGE_BATCH_SIZE
 
     fg_rois_per_image = np.round(frc.FASTER_RCNN_POSITIVE_RATE * rois_per_image)
 
@@ -333,6 +328,11 @@ def process_proposal_targets_py(rpn_rois, batch_rois_indices, batch_gt_bboxes, b
     batch_labels = np.concatenate(batch_labels, axis=0)
     batch_bbox_targets = np.concatenate(batch_bbox_targets, axis=0)
     batch_roi_in_image_indices = np.concatenate(batch_roi_in_image_indices, axis=0)
+
+    # print(batch_rois)
+    # print(batch_labels)
+    # print(batch_bbox_targets)
+    # print(batch_roi_in_image_indices)
 
     return batch_rois, batch_roi_in_image_indices, batch_labels, batch_bbox_targets
 
@@ -400,7 +400,7 @@ def generate_rpn_labels_py(image_anchors, batch_gt_bboxes, gt_batch_indices, bat
 
         return labels
 
-    def _get_targets_and_labels(anchors, gt_bboxes):
+    def _get_targets_and_labels(anchors, gt_bboxes, inside_boarder_indices):
         """Get rpn tagets and labels for each image in one batch."""
         # labels: positive=1; negative=0; not_care=-1
         labels = np.empty((len(anchors),), dtype=np.float32)
@@ -434,7 +434,7 @@ def generate_rpn_labels_py(image_anchors, batch_gt_bboxes, gt_batch_indices, bat
         labels[max_overlaps_for_each_anchor < frc.RPN_IOU_NEGATIVE_THRESHOLD] = 0
 
         # Set positive labels
-        labels[max_overlap_indices] = 1
+        # labels[max_overlap_indices] = 1
         labels[max_overlaps_for_each_anchor >= frc.RPN_IOU_POSITIVE_THRESHOLD] = 1
 
         bbox_targets = encode_bboxes(anchors, gt_bboxes[max_overlap_gt_indices, :])
@@ -454,9 +454,9 @@ def generate_rpn_labels_py(image_anchors, batch_gt_bboxes, gt_batch_indices, bat
         anchors = image_anchors[inside_boarder_indices, :]
 
         selected_gt_in_batch = np.where(gt_batch_indices == ind_in_batch)[0]
-        batch_gt = batch_gt_bboxes[selected_gt_in_batch, :]
+        batch_gt = batch_gt_bboxes[selected_gt_in_batch, :-1]
 
-        labels, bbox_targets = _get_targets_and_labels(anchors, batch_gt)
+        labels, bbox_targets = _get_targets_and_labels(anchors, batch_gt, inside_boarder_indices)
         batch_labels.append(labels)
         batch_bbox_targets.append(bbox_targets)
 
@@ -470,8 +470,8 @@ def generate_rpn_labels_py(image_anchors, batch_gt_bboxes, gt_batch_indices, bat
     batch_labels = batch_labels.reshape([-1, 1])
     # print(batch_labels.shape)
     # print(batch_bbox_targets.shape)
-    assert batch_bbox_targets.shape[0] == batch_labels.shape[0] == \
-           frc.IMAGE_BATCH_SIZE * frc.ANCHOR_NUM * frc.IMAGE_SHAPE[0] * frc.IMAGE_SHAPE[1] / (frc.FEATURE_STRIDE * frc.FEATURE_STRIDE)
+    # assert batch_bbox_targets.shape[0] == batch_labels.shape[0] == \
+    #        frc.IMAGE_BATCH_SIZE * frc.ANCHOR_NUM * frc.IMAGE_SHAPE[0] * frc.IMAGE_SHAPE[1] / (frc.FEATURE_STRIDE * frc.FEATURE_STRIDE)
 
     return batch_bbox_targets, batch_labels
 
