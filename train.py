@@ -30,15 +30,6 @@ def _network(inputs, image_shape, gt_bboxes):
     # RPN
     rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss, rois, labels, bbox_targets = rpn(features, image_shape, gt_bboxes)
 
-    # Image summary for RPN rois
-    class_names = frc.CLS_NAMES + ['circle', 'rectangle', 'triangle']
-    display_rois_img = tf.reshape(inputs, shape=[frc.IMAGE_SHAPE[0], frc.IMAGE_SHAPE[1], 3])
-    for i in range(frc.NUM_CLS + 1):
-        display_indices = tf.reshape(tf.where(tf.equal(labels, i)), [-1])
-        display_rois = tf.gather(rois, display_indices)
-        display_img = tf.py_func(draw_rectangle, [display_rois_img, display_rois], [tf.uint8])
-        tf.summary.image('class_rois/{}'.format(class_names[i]), display_img)
-
     # RCNN
     cls_score, bbox_pred = faster_rcnn(features, rois, image_shape)
 
@@ -51,6 +42,22 @@ def _network(inputs, image_shape, gt_bboxes):
     rcnn_bbox_loss, rcnn_cls_loss = build_faster_rcnn_losses(bbox_pred, bbox_targets, cls_prob, labels, frc.NUM_CLS + 1)
 
     # ------------------------------BEGIN SUMMARY--------------------------------
+    # Image summary for RPN rois
+    class_names = frc.CLS_NAMES + ['circle', 'rectangle', 'triangle']
+    display_rois_img = tf.reshape(inputs[0], shape=[frc.IMAGE_SHAPE[0], frc.IMAGE_SHAPE[1], 3])
+    with tf.name_scope('rpn_image_summary'):
+        display_BG_indices = tf.reshape(tf.where(tf.equal(labels, 0)), [-1])
+        display_FG_indices = tf.reshape(tf.where(tf.not_equal(labels, 0)), [-1])
+
+        display_BG_rois = tf.gather(rois, display_BG_indices)
+        display_FG_rois = tf.gather(rois, display_FG_indices)
+
+        display_BG_img = tf.py_func(draw_rectangle, [display_rois_img, display_BG_rois], [tf.uint8])
+        display_FG_img = tf.py_func(draw_rectangle, [display_rois_img, display_FG_rois], [tf.uint8])
+
+    tf.summary.image('class_rois/BG', display_BG_img)
+    tf.summary.image('class_rois/FG', display_FG_img)
+
     # Add predicted bbox with confidence 0.25, 0.5, 0.75 and ground truth in image summary.
     with tf.name_scope('rcnn_image_summary'):
         display_indices_25 = tf.reshape(tf.where(tf.greater_equal(final_score, 0.25) &
@@ -70,16 +77,16 @@ def _network(inputs, image_shape, gt_bboxes):
         display_categories_75 = tf.gather(final_categories, display_indices_75)
 
         display_image_25 = tf.py_func(draw_rectangle_with_name,
-                                      [inputs[0], display_bboxes_25, display_categories_25, class_names],
+                                      [display_rois_img, display_bboxes_25, display_categories_25, class_names],
                                       [tf.uint8])
         display_image_50 = tf.py_func(draw_rectangle_with_name,
-                                      [inputs[0], display_bboxes_50, display_categories_50, class_names],
+                                      [display_rois_img, display_bboxes_50, display_categories_50, class_names],
                                       [tf.uint8])
         display_image_75 = tf.py_func(draw_rectangle_with_name,
-                                      [inputs[0], display_bboxes_75, display_categories_75, class_names],
+                                      [display_rois_img, display_bboxes_75, display_categories_75, class_names],
                                       [tf.uint8])
         display_image_gt = tf.py_func(draw_rectangle_with_name,
-                                      [inputs[0], gt_bboxes[:, :-1], gt_bboxes[:, -1], class_names],
+                                      [display_rois_img, gt_bboxes[:, :-1], gt_bboxes[:, -1], class_names],
                                       [tf.uint8])
 
     tf.summary.image('detection/gt', display_image_gt)
@@ -133,10 +140,10 @@ def _main():
     learning_rate = tf.train.piecewise_constant(global_step, frc.LEARNING_RATE_BOUNDARIES, frc.LEARNING_RATE_SCHEDULAR)
 
     # Adam
-    train_op = tf.train.AdamOptimizer(learning_rate).minimize(total_loss, global_step=global_step)
+    # train_op = tf.train.AdamOptimizer(learning_rate).minimize(total_loss, global_step=global_step)
 
     # Momentum
-    # train_op = tf.train.MomentumOptimizer(learning_rate, momentum=0.9).minimize(total_loss, global_step=global_step)
+    train_op = tf.train.MomentumOptimizer(learning_rate, momentum=0.9).minimize(total_loss, global_step=global_step)
 
     # RMS
     # train_op = tf.train.RMSPropOptimizer(learning_rate, momentum=0.9).minimize(total_loss, global_step=global_step)

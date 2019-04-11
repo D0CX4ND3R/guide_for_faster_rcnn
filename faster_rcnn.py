@@ -93,7 +93,7 @@ def build_faster_rcnn_losses(bbox_pred, bbox_targets, cls_score, labels, num_cls
 
         if frc.FASTER_RCNN_MINIBATCH_SIZE == -1:
             bbox_loss, cls_loss = smooth_l1_loss_rcnn_ohem(bbox_pred, bbox_targets, cross_entropy, labels, num_cls,
-                                                           batch_size=128)
+                                                           batch_size=frc.OHEM_BATCH_SIZE)
         else:
             bbox_loss = smooth_l1_loss_rcnn(bbox_pred, bbox_targets, labels, num_cls)
             cls_loss = tf.reduce_mean(cross_entropy)
