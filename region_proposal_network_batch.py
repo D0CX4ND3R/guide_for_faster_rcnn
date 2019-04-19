@@ -9,7 +9,7 @@ from utils.losses import smooth_l1_loss_rpn
 import faster_rcnn_configs as frc
 
 
-def rpn_batch(features, image_shape, rpn_bbox_target, rpn_labels, anchors):
+def rpn_batch(features, image_shape, gt_bboxes):
     with tf.name_scope('rpn'):
         rpn_cls_score = slim.conv2d(features, 2 * frc.ANCHOR_NUM, [1, 1],
                                     normalizer_fn=slim.batch_norm,
@@ -26,9 +26,19 @@ def rpn_batch(features, image_shape, rpn_bbox_target, rpn_labels, anchors):
                                     activation_fn=None, scope='rpn_bbox_pred')
         rpn_bbox_pred = tf.reshape(rpn_bbox_pred, [frc.IMAGE_BATCH_SIZE, -1, 4])
 
+        # Get the feature map size and generate anchor box according to the size in original image.
+        featuremap_height, featuremap_width = tf.shape(features)[1], tf.shape(features)[2]
+        featuremap_height = tf.cast(featuremap_height, dtype=tf.float32)
+        featuremap_width = tf.cast(featuremap_width, dtype=tf.float32)
+
+        anchors = make_anchors_in_image(frc.ANCHOR_BASE_SIZE, featuremap_width, featuremap_height,
+                                        feature_stride=frc.FEATURE_STRIDE)
+
+        rpn_bbox_target, rpn_labels = batchwise_generate_rpn_labels(anchors, gt_bboxes, image_shape)
+
         # TODO: Calculate rpn_bbox_target and rpn_labels in the stage of batch generating and deliver to this function.
-        rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss = build_rpn_loss_batch(rpn_cls_score, rpn_cls_prob, rpn_bbox_pred,
-                                                                        rpn_bbox_target, rpn_labels)
+        rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss = batchwise_build_rpn_loss(rpn_cls_score, rpn_cls_prob, rpn_bbox_pred,
+                                                                            rpn_bbox_target, rpn_labels)
 
         rois, roi_scores = tf.map_fn(lambda i: process_rpn_proposals(anchors, rpn_cls_prob[i],
                                                                      rpn_bbox_pred[i], image_shape[i]),
@@ -36,7 +46,9 @@ def rpn_batch(features, image_shape, rpn_bbox_target, rpn_labels, anchors):
                                      dtype=(tf.int32, tf.float32))
 
 
-def build_rpn_loss_batch(rpn_cls_score, rpn_cls_prob, rpn_bbox_pred, rpn_bbox_target, rpn_labels):
+
+
+def batchwise_build_rpn_loss(rpn_cls_score, rpn_cls_prob, rpn_bbox_pred, rpn_bbox_target, rpn_labels):
     rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss = tf.map_fn(lambda i: build_rpn_losses(rpn_cls_score[i],
                                                                                     rpn_cls_prob[i],
                                                                                     rpn_bbox_pred[i],
@@ -46,6 +58,27 @@ def build_rpn_loss_batch(rpn_cls_score, rpn_cls_prob, rpn_bbox_pred, rpn_bbox_ta
                                                          dtype=(tf.float32, tf.float32, tf.float32))
 
     return tf.reduce_mean(rpn_cls_loss), tf.reduce_mean(rpn_cls_acc), tf.reduce_sum(rpn_bbox_loss)
+
+
+def batchwise_get_proposal(rpn_pred, rpn_cls, anchors, gt_labels, image_shape):
+    pass
+
+
+def batchwise_generate_rpn_labels(anchors, gt_bboxes, image_shape):
+    def _get_instance_gt_bboxes(ind):
+        return tf.gather(gt_bboxes[:, 1:], tf.where(tf.equal(gt_bboxes[:, 0], ind)))
+
+    batch_rpn_bbox_targets, batch_rpn_labels = tf.map_fn(lambda i: _generate_rpn_labels(
+        anchors[i], _get_instance_gt_bboxes(i), image_shape[i]), range(frc.IMAGE_BATCH_SIZE), dtype=[tf.int32, tf.int32])
+
+    batch_rpn_bbox_targets = tf.reshape(batch_rpn_bbox_targets, [frc.IMAGE_BATCH_SIZE, -1, 4])
+    batch_rpn_labels = tf.reshape(batch_rpn_labels, [frc.IMAGE_BATCH_SIZE, -1])
+
+    return batch_rpn_bbox_targets, batch_rpn_labels
+
+
+def _generate_rpn_labels(anchors, gt_bboxes, image_shape):
+    return tf.py_func(generate_rpn_labels_py, [anchors, gt_bboxes, image_shape], [tf.float32, tf.float32])
 
 
 def rpn(features, image_shape, gt_bboxes):
