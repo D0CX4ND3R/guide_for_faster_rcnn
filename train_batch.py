@@ -8,7 +8,7 @@ import tensorflow as tf
 from tensorflow.contrib import slim
 
 from toy_dataset.shape_generator import generate_shape_image
-from region_proposal_network import rpn
+from region_proposal_network_batch import rpn_batch
 from faster_rcnn import faster_rcnn, process_faster_rcnn, build_faster_rcnn_losses
 
 from utils.image_draw import draw_rectangle_with_name, draw_rectangle
@@ -27,16 +27,8 @@ def _network(inputs, image_shape, gt_bboxes):
                            weights_regularizer=slim.l2_regularizer(frc.L2_WEIGHT),
                            scope='rpn_feature')
 
-    split_features = tf.unstack(features, axis=0)
-    split_image_shape = tf.unstack(image_shape, axis=0)
-    split_gt_bboxes = tf.unstack(gt_bboxes, axis=0)
-
-    for i in range(frc.IMAGE_BATCH_SIZE):
-        rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss, rois, labels, bbox_targets\
-            = rpn(split_features[i], split_image_shape[i], split_gt_bboxes[i])
-
     # RPN
-    # rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss, rois, labels, bbox_targets = rpn(features, image_shape, gt_bboxes)
+    rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss, rois, labels, bbox_targets = rpn_batch(features, image_shape, gt_bboxes)
 
     # RCNN
     cls_score, bbox_pred = faster_rcnn(features, rois, image_shape)
