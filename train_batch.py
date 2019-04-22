@@ -9,7 +9,7 @@ from tensorflow.contrib import slim
 
 from toy_dataset.shape_generator import generate_shape_image
 from region_proposal_network_batch import rpn_batch
-from faster_rcnn import faster_rcnn, process_faster_rcnn, build_faster_rcnn_losses
+from faster_rcnn_batch import faster_rcnn, batchwise_process_faster_rcnn, build_faster_rcnn_losses
 
 from utils.image_draw import draw_rectangle_with_name, draw_rectangle
 import faster_rcnn_configs as frc
@@ -31,13 +31,15 @@ def _network(inputs, image_shape, gt_bboxes):
     rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss, rois, labels, bbox_targets = rpn_batch(features, image_shape, gt_bboxes)
 
     # RCNN
-    cls_score, bbox_pred = faster_rcnn(features, rois, image_shape)
+    # Get cls_score in shape of [FASTER_RCNN_MINIBATCH_SIZE, CLS_NUM + 1]
+    # Get bbox_pred in shape of [FASTER_RCNN_MINIBATCH_SIZE, 4 * (CLS_NUM + 1)]
+    cls_score, bbox_pred = faster_rcnn(features, rois)
 
     cls_prob = slim.softmax(cls_score)
     cls_categories = tf.cast(tf.argmax(cls_prob, axis=1), dtype=tf.int32)
     rcnn_cls_acc = tf.reduce_mean(tf.cast(tf.equal(cls_categories, tf.cast(labels, tf.int32)), tf.float32))
 
-    final_bbox, final_score, final_categories = process_faster_rcnn(rois, bbox_pred, cls_prob, image_shape)
+    final_bbox, final_score, final_categories = batchwise_process_faster_rcnn(rois, bbox_pred, cls_prob, image_shape)
 
     rcnn_bbox_loss, rcnn_cls_loss = build_faster_rcnn_losses(bbox_pred, bbox_targets, cls_prob, labels, frc.NUM_CLS + 1)
 
