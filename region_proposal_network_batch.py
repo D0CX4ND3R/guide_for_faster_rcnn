@@ -49,7 +49,7 @@ def batchwise_build_rpn_loss(rpn_cls_score, rpn_cls_prob, rpn_bbox_pred, rpn_bbo
                                                                                     rpn_bbox_pred[i],
                                                                                     rpn_bbox_target[i],
                                                                                     rpn_labels[i]),
-                                                         np.arange(frc.IMAGE_BATCH_SIZE, dtype=np.int32),
+                                                         tf.range(frc.IMAGE_BATCH_SIZE, dtype=tf.int32),
                                                          dtype=(tf.float32, tf.float32, tf.float32))
 
     return tf.reduce_mean(rpn_cls_loss), tf.reduce_mean(rpn_cls_acc), tf.reduce_sum(rpn_bbox_loss)
@@ -57,10 +57,10 @@ def batchwise_build_rpn_loss(rpn_cls_score, rpn_cls_prob, rpn_bbox_pred, rpn_bbo
 
 def batchwise_process_proposal_targets(rpn_rois, gt_bboxes, rois_mask):
     def _extract_gt_bboxes(ind):
-        return tf.gather(gt_bboxes[:, 1:], tf.where(tf.equal(gt_bboxes[:, 0], ind)))
+        return tf.reshape(tf.gather(gt_bboxes[:, 1:], tf.where(tf.equal(gt_bboxes[:, 0], ind))), [-1, 5])
 
     rois, labels, bbox_targets = tf.map_fn(lambda i: _process_proposal_targets(rpn_rois[i], _extract_gt_bboxes(i), rois_mask[i]),
-                                           range(frc.IMAGE_BATCH_SIZE), dtype=[tf.float32, tf.int32, tf.float32])
+                                           tf.range(frc.IMAGE_BATCH_SIZE, dtype=tf.int32), dtype=[tf.float32, tf.int32, tf.float32])
 
     rois = tf.reshape(rois, [frc.IMAGE_BATCH_SIZE, -1, 4])
     labels = tf.reshape(labels, [frc.IMAGE_BATCH_SIZE, -1])
@@ -82,6 +82,8 @@ def _process_proposal_targets_py(rpn_rois, gt_bboxes, rois_mask):
     """
     # rpn rois: [x1, y1, x2, y2]
     # ground truth: [x1, y1, x2, y2, label]
+    assert np.ndim(rpn_rois) == 2 and rpn_rois.shape[1] == 4, 'The current dim is {}, shape is {}'.format(np.ndim(rpn_rois), rpn_rois.shape)
+    assert np.ndim(gt_bboxes) == 2 and gt_bboxes.shape[1] == 5, 'The current dim is {}, shape is {}'.format(np.ndim(gt_bboxes), gt_bboxes.shape)
 
     rois_in_mask = rpn_rois[np.where(rois_mask == 1)[0]]
     if frc.ADD_GT_BOX_TO_TRAIN:
@@ -206,14 +208,21 @@ def batchwise_get_proposal(anchors, rpn_cls_pred, rpn_bbox_pred, image_shape, sc
                                                                max_output_size=frc.RPN_PROPOSAL_MAX_TRAIN,
                                                                iou_threshold=frc.RPN_NMS_IOU_THRESHOLD)
 
-        selected_indices = tf.Variable(tf.zeros(predict_targets_count, dtype=tf.int32), trainable=False)
-        selected_indices = tf.scatter_update(selected_indices, selected_bboxes_indeces,
-                                             tf.ones_like(selected_bboxes_indeces, dtype=tf.int32))
+        # selected_indices = tf.zeros(predict_targets_count, dtype=tf.int32)
+        # selected_indices = tf.scatter_update(selected_indices, selected_bboxes_indeces,
+        #                                      tf.ones_like(selected_bboxes_indeces, dtype=tf.int32))
+        selected_indices = tf.py_func(_set_mask_by_indices_py, [predict_targets_count, selected_bboxes_indeces], tf.int32)
 
         # selected_bboxes = tf.gather(sorted_bounding_boxes, selected_bboxes_indeces)
         # selected_scores = tf.gather(sorted_rpn_cls_pred, selected_bboxes_indeces)
-        with tf.control_dependencies([selected_indices]):
-            return sorted_bounding_boxes, selected_indices
+        # with tf.control_dependencies([selected_indices]):
+        return sorted_bounding_boxes, selected_indices
+
+    def _set_mask_by_indices_py(mask_size, keep_ind):
+        keep_ind = np.reshape(keep_ind, [-1])
+        labels = np.zeros(mask_size, dtype=np.int32)
+        labels[keep_ind] = 1
+        return labels
 
     anchors_x_min, anchors_y_min, anchors_x_max, anchors_y_max = tf.unstack(anchors, axis=1)
 
@@ -222,8 +231,8 @@ def batchwise_get_proposal(anchors, rpn_cls_pred, rpn_bbox_pred, image_shape, sc
     anchors_center_x = anchors_x_min + anchors_width / 2.0
     anchors_center_y = anchors_y_min + anchors_height / 2.0
 
-    rois, rois_mask = tf.map_fn(lambda i: _get_proposal(rpn_cls_pred[i], rpn_bbox_pred[i], image_shape[i]),
-                                            range(frc.IMAGE_BATCH_SIZE), dtype=[tf.float32, tf.float32, tf.int32])
+    rois, rois_mask = tf.map_fn(lambda i: _get_proposal(rpn_bbox_pred[i], rpn_cls_pred[i], image_shape[i]),
+                                tf.range(frc.IMAGE_BATCH_SIZE, dtype=tf.int32), dtype=(tf.float32, tf.int32))
 
     rois = tf.reshape(rois, [frc.IMAGE_BATCH_SIZE, -1, 4])
     rois_mask = tf.reshape(rois_mask, [frc.IMAGE_BATCH_SIZE, -1])
@@ -233,11 +242,12 @@ def batchwise_get_proposal(anchors, rpn_cls_pred, rpn_bbox_pred, image_shape, sc
 
 def batchwise_generate_rpn_labels(anchors, gt_bboxes, image_shape):
     def _get_instance_gt_bboxes(ind):
-        return tf.gather(gt_bboxes[:, 1:], tf.where(tf.equal(gt_bboxes[:, 0], ind)))
+        return tf.reshape(tf.gather(gt_bboxes[:, 1:], tf.where(tf.equal(gt_bboxes[:, 0], ind))), [-1, 5])
 
     batch_rpn_bbox_targets, batch_rpn_labels = tf.map_fn(lambda i: _generate_rpn_labels(
-        anchors[i], _get_instance_gt_bboxes(i), image_shape[i]), range(frc.IMAGE_BATCH_SIZE), dtype=[tf.int32, tf.int32])
+        anchors, _get_instance_gt_bboxes(i), image_shape[i]), tf.range(frc.IMAGE_BATCH_SIZE, dtype=tf.int32), dtype=[tf.float32, tf.int32])
 
+    batch_rpn_bbox_targets = tf.to_float(batch_rpn_bbox_targets)
     batch_rpn_bbox_targets = tf.reshape(batch_rpn_bbox_targets, [frc.IMAGE_BATCH_SIZE, -1, 4])
     batch_rpn_labels = tf.reshape(batch_rpn_labels, [frc.IMAGE_BATCH_SIZE, -1])
 
@@ -245,7 +255,7 @@ def batchwise_generate_rpn_labels(anchors, gt_bboxes, image_shape):
 
 
 def _generate_rpn_labels(anchors, gt_bboxes, image_shape):
-    return tf.py_func(generate_rpn_labels_py, [anchors, gt_bboxes, image_shape], [tf.float32, tf.float32])
+    return tf.py_func(generate_rpn_labels_py, [anchors, gt_bboxes, image_shape], (tf.float32, tf.int32))
 
 
 # def rpn(features, image_shape, gt_bboxes):
@@ -577,9 +587,13 @@ def generate_rpn_labels_py(all_anchors, gt_bboxes, image_shape):
     anchors = all_anchors[inside_boarder_indices, :]
 
     # labels: positive=1; negative=0; not_care=-1
-    labels = np.empty((len(inside_boarder_indices),), dtype=np.float32)
+    labels = np.empty((len(inside_boarder_indices),))
     labels.fill(-1)
+    labels = labels.astype(np.int32)
 
+    assert np.ndim(gt_bboxes) == 2 and gt_bboxes.shape[0] > 1, \
+        'The intput gt_bboxes dim should be 2 and 0-th shape should greater 1, ' \
+        'the current is {}, shape is {}'.format(np.ndim(gt_bboxes), gt_bboxes.shape)
     overlaps = get_overlaps_py(anchors, gt_bboxes)
     # overlaps: cross ious for each anchors and gt_boxes
     # rows: Anchors Indexes
@@ -622,7 +636,7 @@ def generate_rpn_labels_py(all_anchors, gt_bboxes, image_shape):
     bbox_targets = bbox_targets.reshape([-1, 4])
     labels = labels.reshape([-1, 1])
 
-    return bbox_targets, labels
+    return bbox_targets.astype(np.float32), labels.astype(np.int32)
 
 
 def get_overlaps_py(pred_bboxes, gt_bboxes):
@@ -647,14 +661,14 @@ def get_overlaps_py(pred_bboxes, gt_bboxes):
     # 2                 0
     # 2                 1
     pred_map_indices = np.arange(len_pred_bboxes, dtype=np.int32)
-    pred_map_indices = np.repeat(pred_map_indices, (len_gt_bboxes,))
+    # pred_map_indices = np.repeat(pred_map_indices, (len_gt_bboxes,))
     gt_map_indices = np.arange(len_gt_bboxes, dtype=np.int32)
-    gt_map_indices = np.repeat(gt_map_indices[:, np.newaxis], (len_pred_bboxes,), axis=1).transpose().ravel()
+    # gt_map_indices = np.repeat(gt_map_indices[:, np.newaxis], (len_pred_bboxes,), axis=1).transpose().ravel()
 
     # Can also use np.meshgrid to realize it
-    # gt_map_indices, pred_map_indices = np.meshgrid(gt_map_indices, pred_map_indices)
-    # pred_map_indices = pred_map_indices.ravel()
-    # gt_map_indices = gt_map_indices.ravel()
+    gt_map_indices, pred_map_indices = np.meshgrid(gt_map_indices, pred_map_indices)
+    pred_map_indices = pred_map_indices.ravel()
+    gt_map_indices = gt_map_indices.ravel()
 
     # find overlaps
     intersection_boxes_x1 = np.maximum(gt_bboxes[gt_map_indices, 0], pred_bboxes[pred_map_indices, 0])

@@ -56,7 +56,6 @@ def batchwise_process_faster_rcnn(rois, bbox_pred, scores, image_shape):
         all_cls_bboxex = []
         all_cls_scores = []
         categories = []
-        all_in_mask_count = []
 
         for i in range(frc.NUM_CLS + 1):
             encoded_bbox = bboxes_pred_list[i]
@@ -82,57 +81,84 @@ def batchwise_process_faster_rcnn(rois, bbox_pred, scores, image_shape):
                                                     frc.FASTER_RCNN_NMS_MAX_BOX_PER_CLASS,
                                                     frc.FASTER_RCNN_NMS_IOU_THRESHOLD)
 
-            in_mask_count = tf.shape(keep_ind)[0]
-
             per_cls_bboxes = tf.gather(predict_bboxes, keep_ind)
             per_cls_scores = tf.gather(score, keep_ind)
 
-            per_cls_bboxes = tf.pad(per_cls_bboxes, tf.constant([[0, in_mask_count], [0, 0]], dtype=tf.int32))
-            per_cls_scores = tf.pad(per_cls_scores, tf.constant([[0, in_mask_count]], dtype=tf.int32))
-
             all_cls_bboxex.append(per_cls_bboxes)
             all_cls_scores.append(per_cls_scores)
-            categories.append(tf.ones(in_mask_count))
-            all_in_mask_count.append(in_mask_count)
+            categories.append(i * tf.ones_like(per_cls_scores, dtype=tf.int32))
 
-        final_bboxes = tf.concat(all_cls_bboxex, axis=0)
-        final_scores = tf.concat(all_cls_scores, axis=0)
-        all_in_mask_count = tf.concat(all_in_mask_count, axis=0)
-        return final_bboxes, final_scores, all_in_mask_count
+        final_bboxes = tf.reshape(tf.concat(all_cls_bboxex, axis=0), [-1, 4])
+        final_scores = tf.reshape(tf.concat(all_cls_scores, axis=0), [-1])
+        categories = tf.reshape(tf.concat(categories, axis=0), [-1])
+
+        # assert_op = tf.assert_greater_equal(frc.FASTER_RCNN_OUTPUT_NUM_PER_IMAGE_IN_BATCH, tf.shape(final_scores)[0])
+        # with tf.control_dependencies([assert_op]):
+        # If obtained targets less than configure value, padding them. Otherwise random choice(Not available now).
+        final_bboxes, final_scores, categories = tf.cond(
+            tf.greater_equal(frc.FASTER_RCNN_OUTPUT_NUM_PER_IMAGE_IN_BATCH, tf.shape(categories)[0]),
+            true_fn=lambda: _padding_output(final_bboxes, final_scores, categories),
+            false_fn=lambda: (final_bboxes[:frc.FASTER_RCNN_OUTPUT_NUM_PER_IMAGE_IN_BATCH],
+                              final_scores[:frc.FASTER_RCNN_OUTPUT_NUM_PER_IMAGE_IN_BATCH],
+                              categories[:frc.FASTER_RCNN_OUTPUT_NUM_PER_IMAGE_IN_BATCH]))
+
+        return final_bboxes, final_scores, categories
+
+    def _padding_output(final_bboxes, final_scores, categories):
+        """
+        Padding output shape to guarantee the mapping function output shape in the same.
+        Output categories: -1 means not care in later processing.
+        :param final_bboxes:
+        :param final_scores:
+        :param categories:
+        :return:
+        """
+        padding_base = frc.FASTER_RCNN_OUTPUT_NUM_PER_IMAGE_IN_BATCH - tf.shape(categories)[0]
+        # bbox_padding = tf.constant([[0, padding_base], [0, 0]], dtype=tf.int32)
+        # score_and_cate_padding = tf.constant([[0, padding_base]], dtype=tf.int32)
+        score_and_cate_padding, _ = tf.required_space_to_batch_paddings((tf.shape(categories)[0],),
+                                                                        (frc.FASTER_RCNN_OUTPUT_NUM_PER_IMAGE_IN_BATCH,))
+        bbox_padding, _ = tf.required_space_to_batch_paddings((tf.shape(categories)[0], 4),
+                                                              (frc.FASTER_RCNN_OUTPUT_NUM_PER_IMAGE_IN_BATCH, 4))
+        padding_final_bboxes = tf.pad(final_bboxes, bbox_padding, constant_values=-1)
+        padding_final_scores = tf.pad(final_scores, score_and_cate_padding, constant_values=-1)
+        padding_categories = tf.pad(categories, score_and_cate_padding, constant_values=-1)
+        return padding_final_bboxes, padding_final_scores, padding_categories
 
     with tf.variable_scope('postprocess_faster_rcnn'):
         rois = tf.reshape(rois, [frc.IMAGE_BATCH_SIZE, -1, 4])
         rois = tf.stop_gradient(rois)
 
-        bbox_pred = tf.reshape(bbox_pred, [frc.IMAGE_BATCH_SIZE, frc.NUM_CLS + 1, 4])
+        bbox_pred = tf.reshape(bbox_pred, [frc.IMAGE_BATCH_SIZE, frc.FASTER_RCNN_MINIBATCH_SIZE // frc.IMAGE_BATCH_SIZE, frc.NUM_CLS + 1, 4])
         bbox_pred = tf.stop_gradient(bbox_pred)
 
-        scores = tf.reshape(scores, [frc.IMAGE_BATCH_SIZE, -1])
+        scores = tf.reshape(scores, [frc.IMAGE_BATCH_SIZE, frc.FASTER_RCNN_MINIBATCH_SIZE // frc.IMAGE_BATCH_SIZE, frc.NUM_CLS + 1])
         scores = tf.stop_gradient(scores)
 
         # Get batch final bboxes and scores
         # in shape of [IMAGE_BATCH_SIZE, NUM_CLS + 1, FASTER_RCNN_NMS_MAX_BOX_PER_CLASS, 4 or 1]
-        batch_final_bboxes, batch_final_scores, all_in_mask_count = \
+        batch_final_bboxes, batch_final_scores, batch_categories = \
             tf.map_fn(lambda i: _instance_process(rois[i], bbox_pred[i], scores[i], image_shape[i]),
-                      range(frc.IMAGE_BATCH_SIZE), dtype=[tf.int32, tf.float32, tf.int32])
+                      tf.range(frc.IMAGE_BATCH_SIZE, dtype=tf.int32), dtype=(tf.float32, tf.float32, tf.int32))
 
-        final_bboxes_list = tf.unstack(batch_final_bboxes, axis=0)
-        final_scores_list = tf.unstack(batch_final_scores, axis=0)
-        in_mask_count_list = tf.unstack(all_in_mask_count, axis=0)
+        batch_categories_list = tf.unstack(batch_categories, axis=0)
+        # batch_final_bboxes_list = tf.unstack(batch_final_bboxes, axis=0)
+        # batch_final_scores_list = tf.unstack(batch_final_scores, axis=0)
+        batch_final_bboxes_list = []
+        batch_final_scores_list = []
 
-        clear_final_bboxes_list = []
-        clear_final_scores_list = []
+        for i, categories in enumerate(batch_categories_list):
+            keep_ind = tf.where(tf.not_equal(categories, -1))
+            # final_bboxes, final_scores, categories = tf.cond(tf.not_equal(tf.shape(keep_ind)[0], 0),
+            #                                                  true_fn=lambda: (tf.gather(batch_final_bboxes[i, ...], keep_ind),
+            #                                                                   tf.gather(batch_final_scores[i], keep_ind),
+            #                                                                   tf.gather(categories, keep_ind)),
+            #                                                  false_fn=(None, None, None))
+            batch_final_bboxes_list.append(tf.reshape(tf.gather(batch_final_bboxes[i], keep_ind), [-1, 4]))
+            batch_final_scores_list.append(tf.reshape(tf.gather(batch_final_scores[i], keep_ind), [-1]))
+            batch_categories_list[i] = tf.reshape(tf.gather(categories, keep_ind), [-1])
 
-        for final_bboxes, final_scores, in_mask_count in zip(final_bboxes_list, final_scores_list, in_mask_count_list):
-            if in_mask_count == 0:
-                clear_final_bboxes_list.append(None)
-                clear_final_scores_list.append(None)
-                continue
-
-            clear_final_bboxes_list.append(final_bboxes[:in_mask_count])
-            clear_final_scores_list.append(final_scores[:in_mask_count])
-
-        return clear_final_bboxes_list, clear_final_scores_list
+        return batch_final_bboxes_list, batch_final_scores_list, batch_categories_list
 
 
 # def process_faster_rcnn(rois, bbox_pred, scores, image_shape):
@@ -187,6 +213,9 @@ def batchwise_process_faster_rcnn(rois, bbox_pred, scores, image_shape):
 
 def build_faster_rcnn_losses(bbox_pred, bbox_targets, cls_score, labels, num_cls):
     with tf.variable_scope('rcnn_losses'):
+        labels = tf.reshape(labels, [-1])
+        bbox_targets = tf.reshape(bbox_targets, [-1, 4 * num_cls])
+
         cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=cls_score, labels=labels)
 
         if frc.FASTER_RCNN_MINIBATCH_SIZE == -1:
