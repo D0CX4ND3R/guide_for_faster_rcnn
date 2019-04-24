@@ -28,6 +28,7 @@ python train.py
 `
 python train_batch.py
 `
+* COCO is not available.
 
 ##Testing
 `
