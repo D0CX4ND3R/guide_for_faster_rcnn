@@ -1,5 +1,6 @@
 import tensorflow as tf
 from tensorflow.contrib import slim
+from tensorflow.python.ops import gen_image_ops
 
 import numpy as np
 
@@ -7,6 +8,8 @@ from utils.anchor_utils import encode_bboxes, generate_anchors
 from utils.losses import smooth_l1_loss_rpn
 
 import faster_rcnn_configs as frc
+
+tf.image.non_max_suppression = gen_image_ops.non_max_suppression_v2
 
 
 def rpn_batch(features, image_shape, gt_bboxes):
@@ -38,8 +41,10 @@ def rpn_batch(features, image_shape, gt_bboxes):
 
         rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss = batchwise_build_rpn_loss(rpn_cls_score, rpn_cls_prob, rpn_bbox_pred,
                                                                             rpn_bbox_target, rpn_labels)
+
         rois, rois_mask = batchwise_get_proposal(anchors, rpn_cls_prob, rpn_bbox_pred, image_shape)
         rois, labels, bbox_targets = batchwise_process_proposal_targets(rois, gt_bboxes, rois_mask)
+
     return rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss, rois, labels, bbox_targets
 
 
