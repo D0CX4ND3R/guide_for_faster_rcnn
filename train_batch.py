@@ -61,43 +61,45 @@ def _network(inputs, image_shape, gt_bboxes):
     tf.summary.image('class_rois/FG', display_FG_img)
 
     # Add predicted bbox with confidence 0.25, 0.5, 0.75 and ground truth in image summary.
-    # with tf.name_scope('rcnn_image_summary'):
-    #     final_bbox = final_bbox_list[0]
-    #     final_score = final_score_list[0]
-    #     final_categories = final_categories_list[0]
-    #     display_indices_25 = tf.reshape(tf.where(tf.greater_equal(final_score, 0.25) &
-    #                                              tf.less(final_score, 0.5) &
-    #                                              tf.not_equal(final_categories, 0)), [-1])
-    #     display_indices_50 = tf.reshape(tf.where(tf.greater_equal(final_score, 0.5) &
-    #                                              tf.less(final_score, 0.75) &
-    #                                              tf.not_equal(final_categories, 0)), [-1])
-    #     display_indices_75 = tf.reshape(tf.where(tf.greater_equal(final_score, 0.75) &
-    #                                              tf.not_equal(final_categories, 0)), [-1])
-    #
-    #     display_bboxes_25 = tf.gather(final_bbox, display_indices_25)
-    #     display_bboxes_50 = tf.gather(final_bbox, display_indices_50)
-    #     display_bboxes_75 = tf.gather(final_bbox, display_indices_75)
-    #     display_categories_25 = tf.gather(final_categories, display_indices_25)
-    #     display_categories_50 = tf.gather(final_categories, display_indices_50)
-    #     display_categories_75 = tf.gather(final_categories, display_indices_75)
-    #
-    #     display_image_25 = tf.py_func(draw_rectangle_with_name,
-    #                                   [display_rois_img, display_bboxes_25, display_categories_25, class_names],
-    #                                   [tf.uint8])
-    #     display_image_50 = tf.py_func(draw_rectangle_with_name,
-    #                                   [display_rois_img, display_bboxes_50, display_categories_50, class_names],
-    #                                   [tf.uint8])
-    #     display_image_75 = tf.py_func(draw_rectangle_with_name,
-    #                                   [display_rois_img, display_bboxes_75, display_categories_75, class_names],
-    #                                   [tf.uint8])
-    #     display_image_gt = tf.py_func(draw_rectangle_with_name,
-    #                                   [display_rois_img, gt_bboxes[:, :-1], gt_bboxes[:, -1], class_names],
-    #                                   [tf.uint8])
-    #
-    # tf.summary.image('detection/gt', display_image_gt)
-    # tf.summary.image('detection/25', display_image_25)
-    # tf.summary.image('detection/50', display_image_50)
-    # tf.summary.image('detection/75', display_image_75)
+    with tf.name_scope('rcnn_image_summary'):
+        final_bbox = final_bbox_list[0]
+        final_score = final_score_list[0]
+        final_categories = final_categories_list[0]
+        display_indices_25 = tf.reshape(tf.where(tf.greater_equal(final_score, 0.25) &
+                                                 tf.less(final_score, 0.5) &
+                                                 tf.not_equal(final_categories, 0)), [-1])
+        display_indices_50 = tf.reshape(tf.where(tf.greater_equal(final_score, 0.5) &
+                                                 tf.less(final_score, 0.75) &
+                                                 tf.not_equal(final_categories, 0)), [-1])
+        display_indices_75 = tf.reshape(tf.where(tf.greater_equal(final_score, 0.75) &
+                                                 tf.not_equal(final_categories, 0)), [-1])
+
+        display_bboxes_25 = tf.gather(final_bbox, display_indices_25)
+        display_bboxes_50 = tf.gather(final_bbox, display_indices_50)
+        display_bboxes_75 = tf.gather(final_bbox, display_indices_75)
+        display_categories_25 = tf.gather(final_categories, display_indices_25)
+        display_categories_50 = tf.gather(final_categories, display_indices_50)
+        display_categories_75 = tf.gather(final_categories, display_indices_75)
+
+        show_gt = tf.reshape(tf.gather(gt_bboxes[:, 1:], tf.where(tf.equal(gt_bboxes[:, 0], 0))), [-1, 5])
+
+        display_image_25 = tf.py_func(draw_rectangle_with_name,
+                                      [display_rois_img, display_bboxes_25, display_categories_25, class_names],
+                                      [tf.uint8])
+        display_image_50 = tf.py_func(draw_rectangle_with_name,
+                                      [display_rois_img, display_bboxes_50, display_categories_50, class_names],
+                                      [tf.uint8])
+        display_image_75 = tf.py_func(draw_rectangle_with_name,
+                                      [display_rois_img, display_bboxes_75, display_categories_75, class_names],
+                                      [tf.uint8])
+        display_image_gt = tf.py_func(draw_rectangle_with_name,
+                                      [display_rois_img, show_gt[:, :-1], show_gt[:, -1], class_names],
+                                      [tf.uint8])
+
+    tf.summary.image('detection/gt', display_image_gt)
+    tf.summary.image('detection/25', display_image_25)
+    tf.summary.image('detection/50', display_image_50)
+    tf.summary.image('detection/75', display_image_75)
     # -------------------------------END SUMMARY---------------------------------
 
     loss_dict = {'rpn_cls_loss': rpn_cls_loss,
@@ -107,8 +109,7 @@ def _network(inputs, image_shape, gt_bboxes):
     acc_dict = {'rpn_cls_acc': rpn_cls_acc,
                 'rcnn_cls_acc': rcnn_cls_acc}
 
-    # return final_bbox, final_score, final_categories, loss_dict, acc_dict
-    return loss_dict, acc_dict
+    return final_bbox, final_score, final_categories, loss_dict, acc_dict
 
 
 def _image_batch(image_shape, batch_size=2):
@@ -148,8 +149,7 @@ def _main():
     # Preprocess input images
     preprocessed_inputs = _preprocess(tf_images)
 
-    # final_bbox, final_score, final_categories, loss_dict, acc_dict = _network(preprocessed_inputs, tf_shape, tf_labels)
-    loss_dict, acc_dict = _network(preprocessed_inputs, tf_shape, tf_labels)
+    final_bbox, final_score, final_categories, loss_dict, acc_dict = _network(preprocessed_inputs, tf_shape, tf_labels)
 
     total_loss = frc.RPN_CLASSIFICATION_LOSS_WEIGHTS * loss_dict['rpn_cls_loss'] + \
                  frc.RPN_LOCATION_LOSS_WEIGHTS * loss_dict['rpn_bbox_loss'] + \

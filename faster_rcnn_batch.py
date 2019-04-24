@@ -9,6 +9,9 @@ from utils.losses import smooth_l1_loss_rcnn, smooth_l1_loss_rcnn_ohem
 
 import faster_rcnn_configs as frc
 
+from tensorflow.python.ops import gen_image_ops
+tf.image.non_max_suppression = gen_image_ops.non_max_suppression_v2
+
 
 def faster_rcnn(features, rois, is_training=True):
     """
@@ -140,6 +143,7 @@ def batchwise_process_faster_rcnn(rois, bbox_pred, scores, image_shape):
         batch_final_bboxes, batch_final_scores, batch_categories = \
             tf.map_fn(lambda i: _instance_process(rois[i], bbox_pred[i], scores[i], image_shape[i]),
                       tf.range(frc.IMAGE_BATCH_SIZE, dtype=tf.int32), dtype=(tf.float32, tf.float32, tf.int32))
+
 
         batch_categories_list = tf.unstack(batch_categories, axis=0)
         # batch_final_bboxes_list = tf.unstack(batch_final_bboxes, axis=0)
