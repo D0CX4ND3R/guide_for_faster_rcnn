@@ -8,8 +8,8 @@ import tensorflow as tf
 from tensorflow.contrib import slim
 
 from toy_dataset.shape_generator import generate_shape_image
-from region_proposal_network import rpn
-from faster_rcnn import faster_rcnn, process_faster_rcnn, build_faster_rcnn_losses
+from region_proposal_network_batch import rpn_batch
+from faster_rcnn_batch import faster_rcnn, batchwise_process_faster_rcnn, build_faster_rcnn_losses
 
 from utils.image_draw import draw_rectangle_with_name, draw_rectangle
 import faster_rcnn_configs as frc
@@ -28,16 +28,18 @@ def _network(inputs, image_shape, gt_bboxes):
                            scope='rpn_feature')
 
     # RPN
-    rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss, rois, labels, bbox_targets = rpn(features, image_shape, gt_bboxes)
+    rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss, rois, labels, bbox_targets = rpn_batch(features, image_shape, gt_bboxes)
 
     # RCNN
-    cls_score, bbox_pred = faster_rcnn(features, rois, image_shape)
+    # Get cls_score in shape of [FASTER_RCNN_MINIBATCH_SIZE, CLS_NUM + 1]
+    # Get bbox_pred in shape of [FASTER_RCNN_MINIBATCH_SIZE, 4 * (CLS_NUM + 1)]
+    cls_score, bbox_pred = faster_rcnn(features, rois)
 
     cls_prob = slim.softmax(cls_score)
     cls_categories = tf.cast(tf.argmax(cls_prob, axis=1), dtype=tf.int32)
-    rcnn_cls_acc = tf.reduce_mean(tf.cast(tf.equal(cls_categories, tf.cast(labels, tf.int32)), tf.float32))
+    rcnn_cls_acc = tf.reduce_mean(tf.cast(tf.equal(cls_categories, tf.cast(tf.reshape(labels, [-1]), tf.int32)), tf.float32))
 
-    final_bbox, final_score, final_categories = process_faster_rcnn(rois, bbox_pred, cls_prob, image_shape)
+    final_bbox_list, final_score_list, final_categories_list = batchwise_process_faster_rcnn(rois, bbox_pred, cls_prob, image_shape)
 
     rcnn_bbox_loss, rcnn_cls_loss = build_faster_rcnn_losses(bbox_pred, bbox_targets, cls_prob, labels, frc.NUM_CLS + 1)
 
@@ -46,11 +48,11 @@ def _network(inputs, image_shape, gt_bboxes):
     class_names = frc.CLS_NAMES + ['circle', 'rectangle', 'triangle']
     display_rois_img = tf.reshape(inputs[0], shape=[frc.IMAGE_SHAPE[0], frc.IMAGE_SHAPE[1], 3])
     with tf.name_scope('rpn_image_summary'):
-        display_BG_indices = tf.reshape(tf.where(tf.equal(labels, 0)), [-1])
-        display_FG_indices = tf.reshape(tf.where(tf.not_equal(labels, 0)), [-1])
+        display_BG_indices = tf.reshape(tf.where(tf.equal(labels[0], 0)), [-1])
+        display_FG_indices = tf.reshape(tf.where(tf.not_equal(labels[0], 0)), [-1])
 
-        display_BG_rois = tf.gather(rois, display_BG_indices)
-        display_FG_rois = tf.gather(rois, display_FG_indices)
+        display_BG_rois = tf.gather(rois[0], display_BG_indices)
+        display_FG_rois = tf.gather(rois[0], display_FG_indices)
 
         display_BG_img = tf.py_func(draw_rectangle, [display_rois_img, display_BG_rois], [tf.uint8])
         display_FG_img = tf.py_func(draw_rectangle, [display_rois_img, display_FG_rois], [tf.uint8])
@@ -60,6 +62,9 @@ def _network(inputs, image_shape, gt_bboxes):
 
     # Add predicted bbox with confidence 0.25, 0.5, 0.75 and ground truth in image summary.
     with tf.name_scope('rcnn_image_summary'):
+        final_bbox = final_bbox_list[0]
+        final_score = final_score_list[0]
+        final_categories = final_categories_list[0]
         display_indices_25 = tf.reshape(tf.where(tf.greater_equal(final_score, 0.25) &
                                                  tf.less(final_score, 0.5) &
                                                  tf.not_equal(final_categories, 0)), [-1])
@@ -76,6 +81,8 @@ def _network(inputs, image_shape, gt_bboxes):
         display_categories_50 = tf.gather(final_categories, display_indices_50)
         display_categories_75 = tf.gather(final_categories, display_indices_75)
 
+        show_gt = tf.reshape(tf.gather(gt_bboxes[:, 1:], tf.where(tf.equal(gt_bboxes[:, 0], 0))), [-1, 5])
+
         display_image_25 = tf.py_func(draw_rectangle_with_name,
                                       [display_rois_img, display_bboxes_25, display_categories_25, class_names],
                                       [tf.uint8])
@@ -86,7 +93,7 @@ def _network(inputs, image_shape, gt_bboxes):
                                       [display_rois_img, display_bboxes_75, display_categories_75, class_names],
                                       [tf.uint8])
         display_image_gt = tf.py_func(draw_rectangle_with_name,
-                                      [display_rois_img, gt_bboxes[:, :-1], gt_bboxes[:, -1], class_names],
+                                      [display_rois_img, show_gt[:, :-1], show_gt[:, -1], class_names],
                                       [tf.uint8])
 
     tf.summary.image('detection/gt', display_image_gt)
@@ -105,11 +112,21 @@ def _network(inputs, image_shape, gt_bboxes):
     return final_bbox, final_score, final_categories, loss_dict, acc_dict
 
 
-def _image_batch(image_shape, batch_size=1):
-    batch_image, bboxes, labels, _ = generate_shape_image(image_shape)
-    batch_image = batch_image.reshape((batch_size, image_shape[0], image_shape[1], 3))
-
-    return batch_image, np.hstack([bboxes, labels[:, np.newaxis]]), image_shape
+def _image_batch(image_shape, batch_size=2):
+    while True:
+        batch_image, batch_gt, batch_image_shape = [], [], []
+        for i in range(batch_size):
+            image, bboxes, labels, _ = generate_shape_image(image_shape)
+            labels = np.reshape(labels, [-1, 1])
+            batch_ind = i * np.ones_like(labels)
+            gt_labels = np.hstack([batch_ind, bboxes, labels])
+            batch_image.append(image)
+            batch_gt.append(gt_labels)
+            batch_image_shape.append(image_shape)
+        batch_image = np.stack(batch_image, axis=0)
+        batch_gt = np.vstack(batch_gt)
+        batch_image_shape = np.vstack(batch_image_shape)
+        yield batch_image, batch_gt, batch_image_shape
 
 
 def _preprocess(inputs, image_shape=None):
@@ -117,12 +134,17 @@ def _preprocess(inputs, image_shape=None):
 
 
 def _main():
+    # dataset = tf.data.Dataset.from_generator(lambda: _image_batch(frc.IMAGE_SHAPE), (tf.float32, tf.int32, tf.int32))
+    # dataset = dataset.batch(frc.IMAGE_BATCH_SIZE)
+    # iterator = dataset.make_one_shot_iterator()
+    batch_generator = _image_batch(frc.IMAGE_SHAPE, frc.IMAGE_BATCH_SIZE)
+
     with tf.name_scope('inputs'):
         tf_images = tf.placeholder(dtype=tf.float32,
-                                   shape=[frc.IMAGE_BATCH_SIZE, frc.IMAGE_SHAPE[0], frc.IMAGE_SHAPE[1], 3],
+                                   shape=[None, frc.IMAGE_SHAPE[0], frc.IMAGE_SHAPE[1], 3],
                                    name='images')
-        tf_labels = tf.placeholder(dtype=tf.int32, shape=[None, 5], name='ground_truth_bbox')
-        tf_shape = tf.placeholder(dtype=tf.int32, shape=[None], name='image_shape')
+        tf_labels = tf.placeholder(dtype=tf.int32, shape=[None, 6], name='ground_truth_bbox')
+        tf_shape = tf.placeholder(dtype=tf.int32, shape=[None, 2], name='image_shape')
 
     # Preprocess input images
     preprocessed_inputs = _preprocess(tf_images)
@@ -185,12 +207,16 @@ def _main():
             os.mkdir(save_model_dir)
         summary_writer = tf.summary.FileWriter(log_dir, graph=sess.graph)
 
-        coord = tf.train.Coordinator()
-        threads = tf.train.start_queue_runners(sess, coord)
+        # coord = tf.train.Coordinator()
+        # threads = tf.train.start_queue_runners(sess, coord)
 
         try:
             for step in range(frc.MAXIMUM_ITERS + 1):
-                images, gt_bboxes, image_shape = _image_batch(image_shape=frc.IMAGE_SHAPE)
+                # batch_image, batch_gt, batch_labels = iterator.get_next()
+                # batch_gt = tf.squeeze(batch_gt, axis=0)
+                # batch_labels = tf.squeeze(batch_labels, axis=0)
+                # images, gt_bboxes, image_shape = sess.run([batch_image, batch_gt, batch_labels])
+                images, gt_bboxes, image_shape = batch_generator.__next__()
                 feed_dict = {tf_images: images, tf_labels: gt_bboxes, tf_shape: image_shape}
 
                 if step % frc.REFRESH_LOGS_ITERS != 0:
@@ -221,13 +247,20 @@ def _main():
 
                     saver.save(sess, os.path.join(save_model_dir, frc.MODEL_NAME + '.ckpt'), step)
 
-        except tf.errors.OutOfRangeError:
-            print('done')
+        # except tf.errors.OutOfRangeError:
+        #     print('done')
+        except KeyboardInterrupt:
+            print('Interrupt in epoch', step)
         finally:
-            coord.request_stop()
-        coord.join(threads)
-    summary_writer.close()
+            # coord.request_stop()
+        # coord.join(threads)
+            summary_writer.close()
 
 
 if __name__ == '__main__':
     _main()
+    # generator = _image_batch(frc.IMAGE_SHAPE, frc.IMAGE_BATCH_SIZE)
+    # im, gt, sp = generator.__next__()
+    # print(im.shape)
+    # print(gt.shape)
+    # print(sp.shape)

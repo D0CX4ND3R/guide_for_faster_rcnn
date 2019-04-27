@@ -1,0 +1,38 @@
+##Develop Blog
+2019/4/24
+
+0.This is my first blog for this project. At first I just want to
+reproduce the famous Faster R-CNN. Even it does not the latest
+detection framework. But Faster R-CNN has many functions, as RPN 
+and Anchor, which are acknowledged in followed object detection Nets.
+Reproducing all tasks is not easy. I'm a fresher in Deep Learning,
+it takes me near 3 months to build up an original version can only 
+training in batch size 1. I just refer to many repos[py-faster-rcnn][1], 
+[tf-Faster-RCNN][2], [Faster-RCNN_Tensorflow][3]. These repos 
+are all well done with completed framework and use object-oriented 
+programming. For a fresher, reading these code could be very hard, 
+so I made this project. 
+
+1.Now the mini-batch is available for the toy dataset training.
+It takes me half a month. I modified the original codes with many
+map method (`tf.map_fn`) to realize batch-wise processing.
+Unlike Keras, as far as I know, tensorflow doesn't have APIs like
+Lambda layer in Keras. If the inputs or outputs have the same shape,
+the work is not so difficult. But for a common situation, the inputs
+or outputs have different shapes, I just add a mask as indices to
+pick different shape inputs or padding the outputs.
+If there have and ideas about batch-wise processing, I really want to
+learn. If you just read these and have ideas, please tell me and
+thank you so much.
+
+2.Something interesting when I test the mini-batch version. When I complete 
+this version the tf core always down during training. After my searching
+from websites, a really interesting way solved the problem. Using
+a previous implementation of `non_max_suppression` solved the problem
+refer to [22581#issuecomment-427944022][4].
+
+
+[1]: https://github.com/rbgirshick/py-faster-rcnn
+[2]: https://github.com/kevinjliang/tf-Faster-RCNN
+[3]: https://github.com/DetectionTeamUCAS/Faster-RCNN_Tensorflow
+[4]: https://github.com/tensorflow/tensorflow/issues/22581#issuecomment-427944022

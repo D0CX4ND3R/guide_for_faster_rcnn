@@ -5,7 +5,7 @@ import tensorflow as tf
 from tensorflow.contrib import slim
 
 from utils.anchor_utils import decode_bboxes
-from utils.losses import smooth_l1_loss_rcnn
+from utils.losses import smooth_l1_loss_rcnn, smooth_l1_loss_rcnn_ohem
 
 import faster_rcnn_configs as frc
 
@@ -19,13 +19,17 @@ def faster_rcnn(features, rois, image_shape, is_training=True):
             sys.path.append('backbones')
         cnn = import_module(frc.BACKBONE, package='backbones')
         # Fully connected
-        net_flatten = cnn.head(roi_features)
+        net_flatten = cnn.head(roi_features, is_training=True)
+        net_fc = slim.fully_connected(net_flatten, frc.NUM_CLS, activation_fn=None,
+                                      normalizer_fn=slim.batch_norm,
+                                      normalizer_params={'decay': 0.995, 'epsilon': 0.0001},
+                                      weights_regularizer=slim.l2_regularizer(frc.L2_WEIGHT), scope='fc')
 
         with slim.arg_scope([slim.fully_connected], weights_regularizer=slim.l2_regularizer(frc.L2_WEIGHT),
                             weights_initializer=slim.variance_scaling_initializer(1.0, mode='FAN_AVG', uniform=True),
                             activation_fn=None, trainable=is_training):
-            cls_score = slim.fully_connected(net_flatten, frc.NUM_CLS + 1, scope='cls_fc')
-            bbox_pred = slim.fully_connected(net_flatten, 4 * (frc.NUM_CLS + 1), scope='reg_fc')
+            cls_score = slim.fully_connected(net_fc, frc.NUM_CLS + 1, scope='cls_fc')
+            bbox_pred = slim.fully_connected(net_fc, 4 * (frc.NUM_CLS + 1), scope='reg_fc')
 
             cls_score = tf.reshape(cls_score, [-1, frc.NUM_CLS + 1])
             bbox_pred = tf.reshape(bbox_pred, [-1, 4 * (frc.NUM_CLS + 1)])
@@ -85,8 +89,14 @@ def process_faster_rcnn(rois, bbox_pred, scores, image_shape):
 
 def build_faster_rcnn_losses(bbox_pred, bbox_targets, cls_score, labels, num_cls):
     with tf.variable_scope('rcnn_losses'):
-        bbox_loss = smooth_l1_loss_rcnn(bbox_pred, bbox_targets, labels, num_cls)
-        cls_loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=cls_score, labels=labels))
+        cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=cls_score, labels=labels)
+
+        if frc.FASTER_RCNN_MINIBATCH_SIZE == -1:
+            bbox_loss, cls_loss = smooth_l1_loss_rcnn_ohem(bbox_pred, bbox_targets, cross_entropy, labels, num_cls,
+                                                           batch_size=frc.OHEM_BATCH_SIZE)
+        else:
+            bbox_loss = smooth_l1_loss_rcnn(bbox_pred, bbox_targets, labels, num_cls)
+            cls_loss = tf.reduce_mean(cross_entropy)
     return bbox_loss, cls_loss
 
 
