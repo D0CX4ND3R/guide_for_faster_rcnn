@@ -13,6 +13,14 @@ tf.image.non_max_suppression = gen_image_ops.non_max_suppression_v2
 
 
 def rpn_batch(features, image_shape, gt_bboxes):
+    """
+    Region proposal network. Can train batch image input.
+    :param features: Deep features from CNN with size of [batch, height, width, channels]
+    :param image_shape: Image shape without padding (clipping anchor boxes inner image zone)
+    :param gt_bboxes: Ground truth bounding boxes with its batch index like [batch_index, x_up_left, y_up_left, x_down_right, y_down_right, class_label]
+    :return: 6 returns, rpn class loss, rpn class accuracy, rpn localization loss, rois for training roi cnn, labels
+    for training roi cnn, bboxes targets for training roi cnn.
+    """
     with tf.name_scope('rpn'):
         rpn_cls_score = slim.conv2d(features, 2 * frc.ANCHOR_NUM, [1, 1],
                                     normalizer_fn=slim.batch_norm,
@@ -34,9 +42,14 @@ def rpn_batch(features, image_shape, gt_bboxes):
         featuremap_height = tf.cast(featuremap_height, dtype=tf.float32)
         featuremap_width = tf.cast(featuremap_width, dtype=tf.float32)
 
+        # Generate anchors. Each instance in batch use same count of generated anchors. So to save space, we only
+        # generate anchors for one instance but applied to each instance in batch.
         anchors = make_anchors_in_image(frc.ANCHOR_BASE_SIZE, featuremap_width, featuremap_height,
                                         feature_stride=frc.FEATURE_STRIDE)
 
+        # Get rpn bbox targets and labels in batch wise way. The returned rpn_bbox_target stored in corresponding
+        # batch indices with shape of [batch_size, anchor_count, 4] as well as
+        # the rpn_labels with shape of [batch_size, anchor_count].
         rpn_bbox_target, rpn_labels = batchwise_generate_rpn_labels(anchors, gt_bboxes, image_shape)
 
         rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss = batchwise_build_rpn_loss(rpn_cls_score, rpn_cls_prob, rpn_bbox_pred,
@@ -49,6 +62,15 @@ def rpn_batch(features, image_shape, gt_bboxes):
 
 
 def batchwise_build_rpn_loss(rpn_cls_score, rpn_cls_prob, rpn_bbox_pred, rpn_bbox_target, rpn_labels):
+    """
+    Batch wise build rpn loss and accuracy.
+    :param rpn_cls_score: shape is [batch size, 2]
+    :param rpn_cls_prob:  shape is [batch size, 2]
+    :param rpn_bbox_pred: shape is [batch size, generated anchor count, 4]
+    :param rpn_bbox_target: shape is [batch size, generated anchor count, 4]
+    :param rpn_labels: shape is [batch size, generated anchor count]
+    :return: 3 returns, rpn class loss, rpn class accuracy, rpn bounding box localization loss
+    """
     rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss = tf.map_fn(lambda i: build_rpn_losses(rpn_cls_score[i],
                                                                                     rpn_cls_prob[i],
                                                                                     rpn_bbox_pred[i],
@@ -60,112 +82,16 @@ def batchwise_build_rpn_loss(rpn_cls_score, rpn_cls_prob, rpn_bbox_pred, rpn_bbo
     return tf.reduce_mean(rpn_cls_loss), tf.reduce_mean(rpn_cls_acc), tf.reduce_sum(rpn_bbox_loss)
 
 
-def batchwise_process_proposal_targets(rpn_rois, gt_bboxes, rois_mask):
-    def _extract_gt_bboxes(ind):
-        return tf.reshape(tf.gather(gt_bboxes[:, 1:], tf.where(tf.equal(gt_bboxes[:, 0], ind))), [-1, 5])
-
-    rois, labels, bbox_targets = tf.map_fn(lambda i: _process_proposal_targets(rpn_rois[i], _extract_gt_bboxes(i), rois_mask[i]),
-                                           tf.range(frc.IMAGE_BATCH_SIZE, dtype=tf.int32), dtype=[tf.float32, tf.int32, tf.float32])
-
-    rois = tf.reshape(rois, [frc.IMAGE_BATCH_SIZE, -1, 4])
-    labels = tf.reshape(labels, [frc.IMAGE_BATCH_SIZE, -1])
-    bbox_targets = tf.reshape(bbox_targets, [frc.IMAGE_BATCH_SIZE, -1, 4 * (frc.NUM_CLS + 1)])
-    return rois, labels, bbox_targets
-
-
-def _process_proposal_targets(rois, gt_bboxes, rois_mask):
-    return tf.py_func(_process_proposal_targets_py, [rois, gt_bboxes, rois_mask], [tf.float32, tf.int32, tf.float32])
-
-
-def _process_proposal_targets_py(rpn_rois, gt_bboxes, rois_mask):
+def batchwise_get_proposal(anchors, rpn_cls_pred, rpn_bbox_pred, image_shape, scale_factor=None):
     """
-    Assign object detection proposals to ground truth. Produce proposal classification labels and
-    bounding box regression targets.
-    :param rpn_rois:
-    :param gt_bboxes:
+    Get proposal regions from anchors and predicted encoded bboxes.
+    :param anchors: Anchors for only one instance. (Each instance has same anchors, it can be reuse in each instance.)
+    :param rpn_cls_pred: shape is [batch size,
+    :param rpn_bbox_pred:
+    :param image_shape:
+    :param scale_factor:
     :return:
     """
-    # rpn rois: [x1, y1, x2, y2]
-    # ground truth: [x1, y1, x2, y2, label]
-    assert np.ndim(rpn_rois) == 2 and rpn_rois.shape[1] == 4, 'The current dim is {}, shape is {}'.format(np.ndim(rpn_rois), rpn_rois.shape)
-    assert np.ndim(gt_bboxes) == 2 and gt_bboxes.shape[1] == 5, 'The current dim is {}, shape is {}'.format(np.ndim(gt_bboxes), gt_bboxes.shape)
-
-    rois_in_mask = rpn_rois[np.where(rois_mask == 1)[0]]
-    if frc.ADD_GT_BOX_TO_TRAIN:
-        # Add ground truth bboxes to train.
-        all_rois = np.vstack([rois_in_mask, gt_bboxes[:, :-1]])
-    else:
-        all_rois = rois_in_mask
-
-    # use OHEM(Online Hard Example Mining) set rois_per_image = INF
-    # rois_per_image = np.inf if frc.FASTER_RCNN_MINIBATCH_SIZE == -1 else frc.FASTER_RCNN_MINIBATCH_SIZE
-    rois_per_image = frc.FASTER_RCNN_MINIBATCH_SIZE // frc.IMAGE_BATCH_SIZE
-
-    fg_rois_per_image = np.round(frc.FASTER_RCNN_POSITIVE_RATE * rois_per_image)
-
-    # Sample rois with classification labels and bounding box regression.
-    # ALGORTHM:
-    # 1. Calculates overlaps between rois and ground truth.
-    # 2. Get the maximum overlap area for each roi and set it label equal to the ground truth.
-
-    overlaps = get_overlaps_py(all_rois, gt_bboxes[:, :-1])
-    max_overlaps_gt_indices = np.argmax(overlaps, axis=1)
-    max_overlaps = np.max(overlaps, axis=1)
-
-    labels = gt_bboxes[max_overlaps_gt_indices, -1]
-
-    # 3. Set overlap iou larger than iou threshold as positive sample, and less than threshold as negative samples.
-    # IOU > POSITIVE_THRESHOLD = 0.5 => POSITIVE
-    # 0 = NEGATIVE_THRESHOLD < IOU < POSITIVE_THRESHOLD = 0.5 => NEGATIVE
-    # 4. Let the total numbers of rois equal to the
-    # ROIS_PER_IMAGE = FOREGROUND_ROIS_PER_IMAGE + BACKGROUND_ROIS_PER_IMAGE
-
-    # chose foreground indices
-    fg_indices = np.where(max_overlaps >= frc.FASTER_RCNN_IOU_POSITIVE_THRESHOLD)[0]
-    fg_rois_per_image = np.minimum(fg_rois_per_image, fg_indices.size)
-    if fg_indices.size > 0:
-        fg_indices = np.random.choice(fg_indices, size=int(fg_rois_per_image), replace=False)
-
-    # chose background indices
-    bg_indices = np.where((max_overlaps < frc.FASTER_RCNN_IOU_POSITIVE_THRESHOLD) &
-                          (max_overlaps >= frc.FASTER_RCNN_IOU_NEGATIVE_THRESHOLD))[0]
-
-    bg_roi_per_image = rois_per_image - fg_rois_per_image
-    bg_roi_per_image = np.minimum(bg_roi_per_image, bg_indices.size)
-
-    if bg_indices.size > 0:
-        bg_indices = np.random.choice(bg_indices, size=int(bg_roi_per_image), replace=False)
-
-    keep_indices = np.append(fg_indices, bg_indices)
-    labels = labels[keep_indices]
-
-    # 5. Make the negative labels equal to 0.
-    labels[int(fg_rois_per_image):] = 0
-    rois = np.float32(all_rois[keep_indices])
-
-    # 6. Encodes bounding boxes to targets coordinates for bounding box regression.
-    bbox_targets_data = encode_bboxes(rois, gt_bboxes[max_overlaps_gt_indices[keep_indices], :-1])
-    # bbox_targets_data = np.hstack([labels[:, np.newaxis], bbox_targets_data]).astype(np.float32, copy=False)
-
-    # Make the bbox_targets as a sparse matrix. For example, 3 classes and 2 targets, the bbox_targets is like
-    #              ||                               bbox_targets                              ||
-    # Target class ||        Class 1        ||        Class 2        ||        Class 3        ||
-    # ========================================================================================||
-    #              || t_x | t_y | t_w | t_h || t_x | t_y | t_w | t_h || t_x | t_y | t_w | t_h ||
-    #    Class 1   ||  x  |  y  |  w  |  h  ||  0  |  0  |  0  |  0  ||  0  |  0  |  0  |  0  ||
-    #    Class 3   ||  0  |  0  |  0  |  0  ||  0  |  0  |  0  |  0  ||  x  |  y  |  w  |  h  ||
-    bbox_targets = np.zeros((labels.size, 4 * (frc.NUM_CLS + 1)), dtype=np.float32)
-    inds = np.where(labels > 0)[0]
-    for i in inds:
-        cls = labels[i]
-        start = int(4 * cls)
-        end = start + 4
-        bbox_targets[i, start:end] = bbox_targets_data[i, :]
-
-    return rois, labels, bbox_targets
-
-
-def batchwise_get_proposal(anchors, rpn_cls_pred, rpn_bbox_pred, image_shape, scale_factor=None):
     def _get_proposal(bbox_pred, cls_pred, im_shape):
         t_x, t_y, t_w, t_h = tf.unstack(bbox_pred, axis=1)
 
@@ -245,10 +171,48 @@ def batchwise_get_proposal(anchors, rpn_cls_pred, rpn_bbox_pred, image_shape, sc
     return rois, rois_mask
 
 
-def batchwise_generate_rpn_labels(anchors, gt_bboxes, image_shape):
-    def _get_instance_gt_bboxes(ind):
+def batchwise_process_proposal_targets(rpn_rois, gt_bboxes, rois_mask):
+    """
+    Batch wise process proposal targets generated from rpn for training rcnn (roi cnn).
+    :param rpn_rois:
+    :param gt_bboxes:
+    :param rois_mask:
+    :return:
+    """
+    def _extract_gt_bboxes(ind):
         return tf.reshape(tf.gather(gt_bboxes[:, 1:], tf.where(tf.equal(gt_bboxes[:, 0], ind))), [-1, 5])
 
+    def _process_proposal_targets(rois, gt_bboxes, rois_mask):
+        return tf.py_func(process_proposal_targets_py, [rois, gt_bboxes, rois_mask],
+                          [tf.float32, tf.int32, tf.float32])
+
+    rois, labels, bbox_targets = tf.map_fn(lambda i: _process_proposal_targets(rpn_rois[i], _extract_gt_bboxes(i), rois_mask[i]),
+                                           tf.range(frc.IMAGE_BATCH_SIZE, dtype=tf.int32), dtype=[tf.float32, tf.int32, tf.float32])
+
+    rois = tf.reshape(rois, [frc.IMAGE_BATCH_SIZE, -1, 4])
+    labels = tf.reshape(labels, [frc.IMAGE_BATCH_SIZE, -1])
+    bbox_targets = tf.reshape(bbox_targets, [frc.IMAGE_BATCH_SIZE, -1, 4 * (frc.NUM_CLS + 1)])
+    return rois, labels, bbox_targets
+
+
+def batchwise_generate_rpn_labels(anchors, gt_bboxes, image_shape):
+    """
+    Batch wise generate rpn targets and labes for training rpn.
+    :param anchors: Generated anchors from feature map for only one instance in a batch.
+    :param gt_bboxes: Ground truth bounding boxes with batch indices and labels like [batch index, ... , class label]
+    :param image_shape: Original image shape without padding in shape of [batch size, 2]
+    :return: 2 returns, batch_rpn_bbox_targets [batch size, anchor count, 4], batch_rpn_labels [batch size, anchor count]
+    """
+    # Because each image has different number of gt bboxes, this function is necessary.
+    def _get_instance_gt_bboxes(ind):
+        """Get instance gt bboxes according to the batch indices."""
+        return tf.reshape(tf.gather(gt_bboxes[:, 1:], tf.where(tf.equal(gt_bboxes[:, 0], ind))), [-1, 5])
+
+    def _generate_rpn_labels(anchors, gt_bboxes, image_shape):
+        """Generate rpn labels for instance in a batch."""
+        return tf.py_func(generate_rpn_labels_py, [anchors, gt_bboxes, image_shape], (tf.float32, tf.int32))
+
+    # Use tf.map_fn to implement batch wise process.
     batch_rpn_bbox_targets, batch_rpn_labels = tf.map_fn(lambda i: _generate_rpn_labels(
         anchors, _get_instance_gt_bboxes(i), image_shape[i]), tf.range(frc.IMAGE_BATCH_SIZE, dtype=tf.int32), dtype=[tf.float32, tf.int32])
 
@@ -259,79 +223,18 @@ def batchwise_generate_rpn_labels(anchors, gt_bboxes, image_shape):
     return batch_rpn_bbox_targets, batch_rpn_labels
 
 
-def _generate_rpn_labels(anchors, gt_bboxes, image_shape):
-    return tf.py_func(generate_rpn_labels_py, [anchors, gt_bboxes, image_shape], (tf.float32, tf.int32))
+def make_anchors_in_image(anchor_base, feature_width, feature_height, feature_stride):
+    _anchors = generate_anchors(original_anchor=[1, 1, anchor_base - 1, anchor_base - 1],
+                                scales=frc.ANCHOR_SCALE, ratios=frc.ANCHOR_RATE)
+    shift_x = tf.range(feature_width, dtype=tf.float32) * feature_stride
+    shift_y = tf.range(feature_height, dtype=tf.float32) * feature_stride
+    shift_x, shift_y = tf.meshgrid(shift_x, shift_y)
 
-
-# def rpn(features, image_shape, gt_bboxes):
-#     """
-#     The Region proposal Network. Return rpn losses(rpn_cls_loss, rpn_bbox_loss), classification accuracy(rpn_cls_acc)
-#     and samples for training faster r-cnn roi net(rois, labels, bbox_targets).
-#
-#     :param features: feature map from backbone
-#     :param image_shape: image shape [height, width]
-#     :param gt_bboxes: ground truth bouding box [x_up_left, y_up_left, x_down_right, y_down_right, label]
-#     :return: rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss, rois, labels, bbox_targets
-#     """
-#     with tf.variable_scope('rpn'):
-#         # rpn_cls_score
-#         # Get a binary classification results
-#         # with size [batch_size, feature_map_height, feature_map_width 2 * anchor_numbers]
-#         # anchor_numbers = len(anchor_scale) * len(anchor_rate) according to paper the default maybe 9 from
-#         # 3 kind scales [2 ** 3, 2 ** 4, 2 ** 5]
-#         # 3 kind ratio [0.5, 1.0, 2.0]
-#         # This means each pixel in feature map represents a stride receptive field.
-#         # For example, the CNN backbone has 2 x 2 pooling 4 times and only 1 stride 3 x 3 convolution, the
-#         # stride should equal to 2 ** 4 = 16.
-#         # So each pixel in feature map represents a 16 x 16 base region to generate anchor boxes.
-#         # 2 * anchor_number generating anchor boxes with a confidence to judge the anchor box is foreground or background.
-#         rpn_cls_score = slim.conv2d(features, 2 * frc.ANCHOR_NUM, [1, 1],
-#                                     normalizer_fn=slim.batch_norm,
-#                                     normalizer_params={'decay': frc.RPN_BN_DECACY, 'epsilon': frc.RPN_BN_EPS},
-#                                     weights_regularizer=slim.l2_regularizer(frc.RPN_WEIGHTS_L2_PENALITY_FACTOR),
-#                                     activation_fn=None, scope='rpn_cls_score')
-#         rpn_cls_score = tf.reshape(rpn_cls_score, [-1, 2])
-#         rpn_cls_prob = slim.softmax(rpn_cls_score, scope='rpn_cls_pred')
-#
-#         # rpn_bbox_pred
-#         # This generate encoded anchor coordinates with 4 dimensions.
-#         # According to the paper, the encoded coordinates are [t_x, t_y, t_w, t_h] to adjust predicted bounding box.
-#         rpn_bbox_pred = slim.conv2d(features, frc.ANCHOR_NUM * 4, [1, 1],
-#                                     activation_fn=None, scope='rpn_bbox_pred')
-#         rpn_bbox_pred = tf.reshape(rpn_bbox_pred, [-1, 4])
-#
-#         # Get the feature map size and generate anchor box according to the size in original image.
-#         featuremap_height, featuremap_width = tf.shape(features)[1], tf.shape(features)[2]
-#         featuremap_height = tf.cast(featuremap_height, dtype=tf.float32)
-#         featuremap_width = tf.cast(featuremap_width, dtype=tf.float32)
-#
-#         anchors = make_anchors_in_image(frc.ANCHOR_BASE_SIZE, featuremap_width, featuremap_height,
-#                                         feature_stride=frc.FEATURE_STRIDE)
-#
-#         # generate labels and bounding boxes to train rpn
-#         rpn_bbox_targets, rpn_labels = tf.py_func(generate_rpn_labels_py, [anchors, gt_bboxes, image_shape],
-#                                                   [tf.float32, tf.float32])
-#         rpn_labels = tf.to_int32(rpn_labels)
-#         rpn_labels = tf.reshape(rpn_labels, [-1])
-#         rpn_bbox_targets = tf.reshape(rpn_bbox_targets, [-1, 4])
-#
-#         # rpn_losses
-#         rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss = build_rpn_losses(rpn_cls_score, rpn_cls_prob,
-#                                                                     rpn_bbox_pred, rpn_bbox_targets,
-#                                                                     rpn_labels)
-#
-#         # Get RCNN rois
-#         with tf.control_dependencies([rpn_labels]):
-#             # process rpn proposals, including clip, decode, nms
-#             rois, roi_scores = process_rpn_proposals(anchors, rpn_cls_prob, rpn_bbox_pred, image_shape)
-#             rois, labels, bbox_targets = tf.py_func(process_proposal_targets_py, [rois, gt_bboxes],
-#                                                     [tf.float32, tf.int32, tf.float32])
-#
-#             rois = tf.reshape(rois, [-1, 4])
-#             labels = tf.reshape(tf.to_int32(labels), [-1])
-#             bbox_targets = tf.reshape(bbox_targets, [-1, 4 * (frc.NUM_CLS + 1)])
-#
-#     return rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss, rois, labels, bbox_targets
+    shifts = tf.stack([tf.reshape(shift_x, [-1]), tf.reshape(shift_y, [-1]),
+                       tf.reshape(shift_x, [-1]), tf.reshape(shift_y, [-1])],
+                      axis=1)
+    all_anchors = _anchors[tf.newaxis, :, :] + shifts[:, tf.newaxis, :]
+    return tf.reshape(all_anchors, [-1, 4])
 
 
 def build_rpn_losses(rpn_cls_score, rpn_cls_prob, rpn_bbox_pred, rpn_bbox_targets, rpn_labels):
@@ -365,164 +268,6 @@ def build_rpn_losses(rpn_cls_score, rpn_cls_prob, rpn_bbox_pred, rpn_bbox_target
         rpn_bbox_loss = smooth_l1_loss_rpn(rpn_bbox_pred, rpn_bbox_targets, rpn_labels)
 
     return rpn_cls_loss, rpn_cls_acc, rpn_bbox_loss
-
-
-# def process_rpn_proposals(anchors, rpn_cls_pred, rpn_bbox_pred, image_shape, scale_factor=None):
-#     # 1. Trans bboxes
-#     t_x, t_y, t_w, t_h = tf.unstack(rpn_bbox_pred, axis=1)
-#
-#     if scale_factor:
-#         t_x /= scale_factor[0]
-#         t_y /= scale_factor[1]
-#         t_w /= scale_factor[2]
-#         t_h /= scale_factor[3]
-#
-#     anchors_x_min, anchors_y_min, anchors_x_max, anchors_y_max = tf.unstack(anchors, axis=1)
-#     anchors_width = anchors_x_max - anchors_x_min
-#     anchors_height = anchors_y_max - anchors_y_min
-#     anchors_center_x = anchors_x_min + anchors_width / 2.0
-#     anchors_center_y = anchors_y_min + anchors_height / 2.0
-#
-#     # According to equations in Faster-RCNN
-#     # t_x = (x - x_a) / w_a
-#     # t_y = (y - y_a) / h_a
-#     # t_w = log(w / w_a)
-#     # t_h = log(h / h_a)
-#     # Where (t_x, t_y, t_w, t_h) is the prediction by RPN, (x, y, w, h) is the prediction of bounding box,
-#     # (x_a, y_a, w_a, h_a) is the generated anchor box.
-#     # The RPN will be optimized to calculate the coordinates of (t_x, t_y, t_w, t_h).
-#     predict_center_x = t_x * anchors_width + anchors_center_x
-#     predict_center_y = t_y * anchors_height + anchors_center_y
-#     predict_width = tf.exp(t_w) * anchors_width
-#     predict_height = tf.exp(t_h) * anchors_height
-#
-#     predict_x_min = predict_center_x - predict_width / 2
-#     predict_y_min = predict_center_y - predict_height / 2
-#     predict_x_max = predict_center_x + predict_width / 2
-#     predict_y_max = predict_center_y + predict_height / 2
-#
-#     # 2. Clip bounding boxes, make all boxes in the bounding of image
-#     image_height, image_width = tf.to_float(image_shape[0]), tf.to_float(image_shape[1])
-#     predict_x_min = tf.maximum(0., tf.minimum(image_width-1, predict_x_min))
-#     predict_y_min = tf.maximum(0., tf.minimum(image_height-1, predict_y_min))
-#
-#     predict_x_max = tf.maximum(0., tf.minimum(image_width-1, predict_x_max))
-#     predict_y_max = tf.maximum(0., tf.minimum(image_height-1, predict_y_max))
-#
-#     predict_bboxes = tf.stack([predict_x_min, predict_y_min, predict_x_max, predict_y_max], axis=1)
-#
-#     predict_targets_count = tf.minimum(frc.RPN_TOP_K_NMS_TRAIN, tf.shape(predict_bboxes)[0])
-#     sorted_rpn_cls_pred, sorted_pred_indeces = tf.nn.top_k(rpn_cls_pred[:, 1], predict_targets_count)
-#     sorted_bounding_boxes = tf.gather(predict_bboxes, sorted_pred_indeces)
-#
-#     # 3. NMS
-#     selected_bboxes_indeces = tf.image.non_max_suppression(sorted_bounding_boxes, sorted_rpn_cls_pred,
-#                                                            max_output_size=frc.RPN_PROPOSAL_MAX_TRAIN,
-#                                                            iou_threshold=frc.RPN_NMS_IOU_THRESHOLD)
-#
-#     selected_bboxes = tf.gather(sorted_bounding_boxes, selected_bboxes_indeces)
-#     selected_scores = tf.gather(sorted_rpn_cls_pred, selected_bboxes_indeces)
-#     return selected_bboxes, selected_scores
-
-
-def make_anchors_in_image(anchor_base, feature_width, feature_height, feature_stride):
-    _anchors = generate_anchors(original_anchor=[1, 1, anchor_base - 1, anchor_base - 1],
-                                scales=frc.ANCHOR_SCALE, ratios=frc.ANCHOR_RATE)
-    shift_x = tf.range(feature_width, dtype=tf.float32) * feature_stride
-    shift_y = tf.range(feature_height, dtype=tf.float32) * feature_stride
-    shift_x, shift_y = tf.meshgrid(shift_x, shift_y)
-
-    shifts = tf.stack([tf.reshape(shift_x, [-1]), tf.reshape(shift_y, [-1]),
-                       tf.reshape(shift_x, [-1]), tf.reshape(shift_y, [-1])],
-                      axis=1)
-    all_anchors = _anchors[tf.newaxis, :, :] + shifts[:, tf.newaxis, :]
-    return tf.reshape(all_anchors, [-1, 4])
-
-
-# def process_proposal_targets_py(rpn_rois, gt_bboxes):
-#     """
-#     Assign object detection proposals to ground truth. Produce proposal classification labels and
-#     bounding box regression targets.
-#     :param rpn_rois:
-#     :param gt_bboxes:
-#     :return:
-#     """
-#     # rpn rois: [x1, y1, x2, y2]
-#     # ground truth: [x1, y1, x2, y2, label]
-#
-#     if frc.ADD_GT_BOX_TO_TRAIN:
-#         # Add ground truth bboxes to train.
-#         all_rois = np.vstack([rpn_rois, gt_bboxes[:, :-1]])
-#     else:
-#         all_rois = rpn_rois
-#
-#     # use OHEM(Online Hard Example Mining) set rois_per_image = INF
-#     rois_per_image = np.inf if frc.FASTER_RCNN_MINIBATCH_SIZE == -1 else frc.FASTER_RCNN_MINIBATCH_SIZE
-#
-#     fg_rois_per_image = np.round(frc.FASTER_RCNN_POSITIVE_RATE * rois_per_image)
-#
-#     # Sample rois with classification labels and bounding box regression.
-#     # ALGORTHM:
-#     # 1. Calculates overlaps between rois and ground truth.
-#     # 2. Get the maximum overlap area for each roi and set it label equal to the ground truth.
-#
-#     overlaps = get_overlaps_py(all_rois, gt_bboxes[:, :-1])
-#     max_overlaps_gt_indices = np.argmax(overlaps, axis=1)
-#     max_overlaps = np.max(overlaps, axis=1)
-#
-#     labels = gt_bboxes[max_overlaps_gt_indices, -1]
-#
-#     # 3. Set overlap iou larger than iou threshold as positive sample, and less than threshold as negative samples.
-#     # IOU > POSITIVE_THRESHOLD = 0.5 => POSITIVE
-#     # 0 = NEGATIVE_THRESHOLD < IOU < POSITIVE_THRESHOLD = 0.5 => NEGATIVE
-#     # 4. Let the total numbers of rois equal to the
-#     # ROIS_PER_IMAGE = FOREGROUND_ROIS_PER_IMAGE + BACKGROUND_ROIS_PER_IMAGE
-#
-#     # chose foreground indices
-#     fg_indices = np.where(max_overlaps >= frc.FASTER_RCNN_IOU_POSITIVE_THRESHOLD)[0]
-#     fg_rois_per_image = np.minimum(fg_rois_per_image, fg_indices.size)
-#     if fg_indices.size > 0:
-#         fg_indices = np.random.choice(fg_indices, size=int(fg_rois_per_image), replace=False)
-#
-#     # chose background indices
-#     bg_indices = np.where((max_overlaps < frc.FASTER_RCNN_IOU_POSITIVE_THRESHOLD) &
-#                           (max_overlaps >= frc.FASTER_RCNN_IOU_NEGATIVE_THRESHOLD))[0]
-#
-#     bg_roi_per_image = fg_rois_per_image
-#     # bg_roi_per_image = np.ceil(0.2 * fg_rois_per_image) + 1
-#     # bg_roi_per_image = rois_per_image - fg_rois_per_image
-#     bg_roi_per_image = np.minimum(bg_roi_per_image, bg_indices.size)
-#
-#     if bg_indices.size > 0:
-#         bg_indices = np.random.choice(bg_indices, size=int(bg_roi_per_image), replace=False)
-#
-#     keep_indices = np.append(fg_indices, bg_indices)
-#     labels = labels[keep_indices]
-#
-#     # 5. Make the negative labels equal to 0.
-#     labels[int(fg_rois_per_image):] = 0
-#     rois = np.float32(all_rois[keep_indices])
-#
-#     # 6. Encodes bounding boxes to targets coordinates for bounding box regression.
-#     bbox_targets_data = encode_bboxes(rois, gt_bboxes[max_overlaps_gt_indices[keep_indices], :-1])
-#     # bbox_targets_data = np.hstack([labels[:, np.newaxis], bbox_targets_data]).astype(np.float32, copy=False)
-#
-#     # Make the bbox_targets as a sparse matrix. For example, 3 classes and 2 targets, the bbox_targets is like
-#     #              ||                               bbox_targets                              ||
-#     # Target class ||        Class 1        ||        Class 2        ||        Class 3        ||
-#     # ========================================================================================||
-#     #              || t_x | t_y | t_w | t_h || t_x | t_y | t_w | t_h || t_x | t_y | t_w | t_h ||
-#     #    Class 1   ||  x  |  y  |  w  |  h  ||  0  |  0  |  0  |  0  ||  0  |  0  |  0  |  0  ||
-#     #    Class 3   ||  0  |  0  |  0  |  0  ||  0  |  0  |  0  |  0  ||  x  |  y  |  w  |  h  ||
-#     bbox_targets = np.zeros((labels.size, 4 * (frc.NUM_CLS + 1)), dtype=np.float32)
-#     inds = np.where(labels > 0)[0]
-#     for i in inds:
-#         cls = labels[i]
-#         start = int(4 * cls)
-#         end = start + 4
-#         bbox_targets[i, start:end] = bbox_targets_data[i, :]
-#
-#     return rois, labels, bbox_targets
 
 
 def generate_rpn_labels_py(all_anchors, gt_bboxes, image_shape):
@@ -642,6 +387,94 @@ def generate_rpn_labels_py(all_anchors, gt_bboxes, image_shape):
     labels = labels.reshape([-1, 1])
 
     return bbox_targets.astype(np.float32), labels.astype(np.int32)
+
+
+def process_proposal_targets_py(rpn_rois, gt_bboxes, rois_mask):
+    """
+    Assign object detection proposals to ground truth. Produce proposal classification labels and
+    bounding box regression targets.
+    :param rpn_rois:
+    :param gt_bboxes:
+    :return:
+    """
+    # rpn rois: [x1, y1, x2, y2]
+    # ground truth: [x1, y1, x2, y2, label]
+    assert np.ndim(rpn_rois) == 2 and rpn_rois.shape[1] == 4, 'The current dim is {}, shape is {}'.format(np.ndim(rpn_rois), rpn_rois.shape)
+    assert np.ndim(gt_bboxes) == 2 and gt_bboxes.shape[1] == 5, 'The current dim is {}, shape is {}'.format(np.ndim(gt_bboxes), gt_bboxes.shape)
+
+    rois_in_mask = rpn_rois[np.where(rois_mask == 1)[0]]
+    if frc.ADD_GT_BOX_TO_TRAIN:
+        # Add ground truth bboxes to train.
+        all_rois = np.vstack([rois_in_mask, gt_bboxes[:, :-1]])
+    else:
+        all_rois = rois_in_mask
+
+    # use OHEM(Online Hard Example Mining) set rois_per_image = INF
+    # rois_per_image = np.inf if frc.FASTER_RCNN_MINIBATCH_SIZE == -1 else frc.FASTER_RCNN_MINIBATCH_SIZE
+    rois_per_image = frc.FASTER_RCNN_MINIBATCH_SIZE // frc.IMAGE_BATCH_SIZE
+
+    fg_rois_per_image = np.round(frc.FASTER_RCNN_POSITIVE_RATE * rois_per_image)
+
+    # Sample rois with classification labels and bounding box regression.
+    # ALGORTHM:
+    # 1. Calculates overlaps between rois and ground truth.
+    # 2. Get the maximum overlap area for each roi and set it label equal to the ground truth.
+
+    overlaps = get_overlaps_py(all_rois, gt_bboxes[:, :-1])
+    max_overlaps_gt_indices = np.argmax(overlaps, axis=1)
+    max_overlaps = np.max(overlaps, axis=1)
+
+    labels = gt_bboxes[max_overlaps_gt_indices, -1]
+
+    # 3. Set overlap iou larger than iou threshold as positive sample, and less than threshold as negative samples.
+    # IOU > POSITIVE_THRESHOLD = 0.5 => POSITIVE
+    # 0 = NEGATIVE_THRESHOLD < IOU < POSITIVE_THRESHOLD = 0.5 => NEGATIVE
+    # 4. Let the total numbers of rois equal to the
+    # ROIS_PER_IMAGE = FOREGROUND_ROIS_PER_IMAGE + BACKGROUND_ROIS_PER_IMAGE
+
+    # chose foreground indices
+    fg_indices = np.where(max_overlaps >= frc.FASTER_RCNN_IOU_POSITIVE_THRESHOLD)[0]
+    fg_rois_per_image = np.minimum(fg_rois_per_image, fg_indices.size)
+    if fg_indices.size > 0:
+        fg_indices = np.random.choice(fg_indices, size=int(fg_rois_per_image), replace=False)
+
+    # chose background indices
+    bg_indices = np.where((max_overlaps < frc.FASTER_RCNN_IOU_POSITIVE_THRESHOLD) &
+                          (max_overlaps >= frc.FASTER_RCNN_IOU_NEGATIVE_THRESHOLD))[0]
+
+    bg_roi_per_image = rois_per_image - fg_rois_per_image
+    bg_roi_per_image = np.minimum(bg_roi_per_image, bg_indices.size)
+
+    if bg_indices.size > 0:
+        bg_indices = np.random.choice(bg_indices, size=int(bg_roi_per_image), replace=False)
+
+    keep_indices = np.append(fg_indices, bg_indices)
+    labels = labels[keep_indices]
+
+    # 5. Make the negative labels equal to 0.
+    labels[int(fg_rois_per_image):] = 0
+    rois = np.float32(all_rois[keep_indices])
+
+    # 6. Encodes bounding boxes to targets coordinates for bounding box regression.
+    bbox_targets_data = encode_bboxes(rois, gt_bboxes[max_overlaps_gt_indices[keep_indices], :-1])
+    # bbox_targets_data = np.hstack([labels[:, np.newaxis], bbox_targets_data]).astype(np.float32, copy=False)
+
+    # Make the bbox_targets as a sparse matrix. For example, 3 classes and 2 targets, the bbox_targets is like
+    #              ||                               bbox_targets                              ||
+    # Target class ||        Class 1        ||        Class 2        ||        Class 3        ||
+    # ========================================================================================||
+    #              || t_x | t_y | t_w | t_h || t_x | t_y | t_w | t_h || t_x | t_y | t_w | t_h ||
+    #    Class 1   ||  x  |  y  |  w  |  h  ||  0  |  0  |  0  |  0  ||  0  |  0  |  0  |  0  ||
+    #    Class 3   ||  0  |  0  |  0  |  0  ||  0  |  0  |  0  |  0  ||  x  |  y  |  w  |  h  ||
+    bbox_targets = np.zeros((labels.size, 4 * (frc.NUM_CLS + 1)), dtype=np.float32)
+    inds = np.where(labels > 0)[0]
+    for i in inds:
+        cls = labels[i]
+        start = int(4 * cls)
+        end = start + 4
+        bbox_targets[i, start:end] = bbox_targets_data[i, :]
+
+    return rois, labels, bbox_targets
 
 
 def get_overlaps_py(pred_bboxes, gt_bboxes):
